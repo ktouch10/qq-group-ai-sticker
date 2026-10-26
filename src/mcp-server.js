@@ -25,7 +25,7 @@ const config = loadConfig(configFile);
 // 注意：stdio 传输下 stdout 属于协议通道，日志只能走 stderr。
 const service = new StickerService(config, { log: (message) => console.error(`[qq-sticker] ${message}`) });
 
-const server = new McpServer({ name: 'qq-group-ai-sticker', version: '0.1.0' });
+const server = new McpServer({ name: 'qq-group-ai-sticker', version: '0.1.1' });
 
 const text = (value) => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 1) }] });
 const fail = (error) => ({ content: [{ type: 'text', text: `失败：${error?.message ?? error}` }], isError: true });

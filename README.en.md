@@ -41,7 +41,7 @@ self-downloaded image bytes, and prompt-injection hardening.
 - **Humanized pacing**: 0.8–2 s random delay before sending, per-chat cooldown and hourly cap, plus a soft "you have not sent a sticker in a while" hint.
 - **Secure by default**: allowlist for send/collect/remark; image bytes are fetched in-process behind SSRF protection and sent as base64 (URLs are never handed to the gateway); sticker notes are flattened to one line and explicitly framed as *data, not instructions*.
 - **Two ways to use it**: MCP server for any MCP host, or a plain Node library.
-- **56 tests**: quotas, cache eviction, concurrency, allowlist, SSRF helpers, corrupt-store protection, MCP end-to-end.
+- **61 tests**: quotas, cache eviction, concurrency, allowlist, SSRF helpers, corrupt-store protection, MCP end-to-end.
 
 ## Quick start
 

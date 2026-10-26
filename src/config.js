@@ -57,6 +57,8 @@ function merge(base, patch) {
   const out = Array.isArray(base) ? base.slice() : { ...base };
   if (!isPlainObject(patch)) return out;
   for (const [key, value] of Object.entries(patch)) {
+    // null/undefined 当作「没写」：写 `"onebot": null` 不应该让整个网关配置变成 null 并在后面崩掉。
+    if (value === null || value === undefined) continue;
     out[key] = isPlainObject(value) && isPlainObject(base?.[key]) ? merge(base[key], value) : value;
   }
   return out;

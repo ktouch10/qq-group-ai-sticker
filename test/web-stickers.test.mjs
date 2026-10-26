@@ -19,9 +19,11 @@ async function fixture(fn, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-sticker-web-'));
   let time = Date.now();
   const calls = [];
-  const fetchBytes = options.fetchBytes || (async (url, max, opts) => { calls.push({ url, max, opts }); return { buffer: url.includes('/search') ? Buffer.from(html()) : png }; });
+  // 搜图抓页面走文本抓取器，图片走字节抓取器：两条通道必须分开，否则 512KB 的图片上限会让搜索永远失败。
+  const fetchText = options.fetchText || (async (url) => { calls.push({ url, kind: 'text' }); return { body: html() }; });
+  const fetchBytes = options.fetchBytes || (async (url, max, opts) => { calls.push({ url, max, opts, kind: 'image' }); return { buffer: png }; });
   const makePreview = options.makePreview || ((buffer) => createPreview(buffer));
-  const factory = () => createWebStickerLibrary({ root, fetchBytes, makePreview, now: () => time });
+  const factory = () => createWebStickerLibrary({ root, fetchText, fetchBytes, makePreview, now: () => time });
   try {
     await fn({ lib: factory(), factory, root, calls, advance: (ms) => { time += ms; } });
   } finally {
@@ -104,9 +106,9 @@ test('主站失败可回退到固定备用站', () => fixture(async ({ lib }) =>
   const r = await lib.find('开心', ctx);
   assert.equal(r.stickers[0].source, 'fabiaoqing');
 }, {
-  fetchBytes: async (url) => {
+  fetchText: async (url) => {
     if (url.includes('dogetu')) throw new Error('offline');
-    return { buffer: Buffer.from('<img class="bqppsearch" data-original="https://img.soutula.com/bmiddle/abc.jpg" title="开心">') };
+    return { body: '<img class="bqppsearch" data-original="https://img.soutula.com/bmiddle/abc.jpg" title="开心">' };
   }
 }));
 
@@ -140,13 +142,20 @@ test('30 天未用的条目会被淘汰，且只删本库自己的文件', () =>
   assert.deepEqual(fs.readdirSync(dir), ['keep.txt']);
 }));
 
-test('缓存元数据损坏时停用写入，不覆盖损坏文件', () => fixture(async ({ root, factory }) => {
-  // root 已存在（mkdtemp），这里只确保目录可用
+test('缓存元数据损坏时停用写入，不覆盖损坏文件，也不清理缓存目录', () => fixture(async ({ root, factory }) => {
   const file = path.join(root, 'web-stickers.json');
   fs.writeFileSync(file, 'broken');
+  // 目录里放一个真实图片文件：只读降级时它可能是唯一还能救回来的东西，
+  // summary()/status() 这种「看一眼状态」的操作绝不能把它当孤儿删掉。
+  const dir = path.join(root, 'web-stickers-cache');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'a'.repeat(24) + '.image'), png);
   const lib = factory();
   await assert.rejects(lib.find('开心', ctx), /损坏/);
   assert.equal(fs.readFileSync(file, 'utf8'), 'broken');
+  const summary = lib.summary();
+  assert.equal(summary.writable, false);
+  assert.deepEqual(fs.readdirSync(dir), ['a'.repeat(24) + '.image']);
 }));
 
 test('缓存大小与条数上限：32MB / 120 条', () => fixture(async ({ root, factory }) => {
@@ -180,7 +189,7 @@ test('第 5 个并发任务被拒绝，而不是无限排队', async () => {
     release();
     await Promise.all(pending);
   }, {
-    fetchBytes: async () => { await blocked; return { buffer: Buffer.from(html()) }; }
+    fetchText: async () => { await blocked; return { body: html() }; }
   });
 });
 

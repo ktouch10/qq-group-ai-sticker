@@ -13,6 +13,8 @@
    `sticker_send` / `sticker_collect` / `sticker_remark` 的目标必须命中 `allow.groups` / `allow.private`；
    `deny` 优先于 `allow`；白名单为空且 `allowAllWhenEmpty=false`（默认）时**一律拒绝**。
    越权调用返回错误，不会「静默降级成发到别处」。
+   收藏（`sticker_collect`）还会把**消息所属会话**与目标会话绑定：OneBot 的 `get_msg` 凭 messageId 就能读任意消息，
+   所以只校验 target 在白名单里是不够的 —— 消息的 `message_type` / `group_id` / `sender` 必须与 target 一致，否则拒绝。
 
 2. **不接受任意 URL**
    `stickerId` 只接受两种形态：QQ 收藏表情的 emoji_id（必须存在于本地库）或 `web:<24位十六进制>`（必须存在于联网缓存）。

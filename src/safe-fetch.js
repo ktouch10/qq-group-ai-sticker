@@ -279,7 +279,8 @@ function requestOnce(url, ip, limit, binary = false, options = {}) {
             for (const kind of candidates) {
               try {
                 // 允许尾部有少量脏字节：很多站点会多带换行/填充。
-                const opt = { finishFlush: zlib.constants.Z_SYNC_FLUSH, ...(binary ? { maxOutputLength: limit } : {}) };
+                // 文本模式也要限住解压后的体积：否则一个压缩炸弹就能把内存打满。
+                const opt = { finishFlush: zlib.constants.Z_SYNC_FLUSH, maxOutputLength: binary ? limit : Math.max(limit * 8, 1024 * 1024) };
                 decoded = kind === 'brotli' ? zlib.brotliDecompressSync(raw, opt)
                   : kind === 'gunzip' ? zlib.gunzipSync(raw, opt)
                     : zlib.inflateSync(raw, opt);

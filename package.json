@@ -1,6 +1,6 @@
 {
   "name": "qq-group-ai-sticker",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "QQ 群聊/私聊 AI 发表情包插件：QQ 收藏表情知识库 + 联网梗图搜索 + 看图理解 + MCP 工具，让 AI 像真人一样说几句话就配一张图。",
   "type": "module",
   "license": "MIT",

@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { safeFetchBytes, looksLikeImageBuffer } from './safe-fetch.js';
+import { safeFetch, safeFetchBytes, looksLikeImageBuffer } from './safe-fetch.js';
 import { SENSITIVE_RE } from './sensitive.js';
 import { sanitizeStickerText } from './sticker-store.js';
 import { createPreview as defaultPreview } from './preview.js';
@@ -61,7 +61,7 @@ export function parseExpressionResults(html, source, query) {
   return out.sort((a,b) => Number(b.title === query) - Number(a.title === query) || a.title.length - b.title.length).slice(0, 6);
 }
 
-export function createWebStickerLibrary({ root, fetchBytes = safeFetchBytes, makePreview = defaultPreview, now = Date.now } = {}) {
+export function createWebStickerLibrary({ root, fetchBytes = safeFetchBytes, fetchText = safeFetch, makePreview = defaultPreview, now = Date.now } = {}) {
   root = path.resolve(root);
   const directory = path.join(root,'web-stickers-cache');
   const file = path.join(root,'web-stickers.json');
@@ -100,6 +100,9 @@ export function createWebStickerLibrary({ root, fetchBytes = safeFetchBytes, mak
     return e;
   }
   function clean() {
+    // 只读模式（元数据损坏）下**绝不**动磁盘：此时 state.entries 是空的，
+    // 继续清理会把缓存目录里真实存在的图片当「孤儿」全删掉，而 URL 已经丢了、不可恢复。
+    if (!writable) return;
     const t=now();state.searches=state.searches.filter(r=>r.at>t-DAY);state.previews=state.previews.filter(r=>r.at>t-HOUR);
     state.queries=state.queries.filter(q=>q.expires>t).slice(-80);
     state.entries.sort((a,b)=>(b.lastUsedAt||b.createdAt)-(a.lastUsedAt||a.createdAt));
@@ -117,7 +120,7 @@ export function createWebStickerLibrary({ root, fetchBytes = safeFetchBytes, mak
   function concise(e) { return { id:e.id,label:sanitizeStickerText(e.note||e.title,36),...(e.reviewed?{tags:(e.tags||[]).slice(0,3),usage:sanitizeStickerText(e.usage,36)}:{}),source:e.source,needsPreview:!e.reviewed }; }
   const output = (entries, source, note='') => ({ source, stickers:entries.slice(0,3).map(concise), ...(note?{note}:{}) });
   function rate(kind, owner) {
-    const t=now(),who=digest(owner),rows=state[kind];
+    const t=now(),who=digest(String(owner ?? 'local')),rows=state[kind];
     if (kind === 'searches') {
       const mine=rows.filter(r=>r.who===who&&r.at>t-HOUR);
       if (mine.some(r=>r.at>t-120000)||mine.length>=3||rows.filter(r=>r.at>t-HOUR).length>=12||rows.length>=48) return false;
@@ -137,7 +140,7 @@ export function createWebStickerLibrary({ root, fetchBytes = safeFetchBytes, mak
       const sources=[['dogetu','https://www.dogetu.com/search?keyword='+encodeURIComponent(q)],['fabiaoqing','https://fabiaoqing.com/search/bqb/keyword/'+encodeURIComponent(q)]];
       for(const [source,url] of sources){
         guard();
-        try{const r=await fetchBytes(url,LIMIT.html,{timeoutMs:10000});guard();success=true;results=parseExpressionResults(r.buffer.toString('utf8'),source,q);if(results.length)break;}
+        try{const r=await fetchText(url,LIMIT.html);guard();success=true;results=parseExpressionResults(String(r?.body ?? ''),source,q);if(results.length)break;}
         catch(e){guard();}
       }
       guard();

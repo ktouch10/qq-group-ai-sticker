@@ -48,12 +48,11 @@ function setup(overrides = {}) {
     { baseDir: dataDir, env: {} }
   );
   const client = new FakeClient();
-  const fetchBytes = async (url) => {
-    if (String(url).includes('/search')) return { buffer: Buffer.from(searchHtml()) };
-    return { buffer: PNG };
-  };
-  const service = new StickerService(config, { client, fetchBytes, makePreview: async () => JPEG, sleep: async () => {}, log: () => {} });
-  return { service, client, config, dataDir, cleanup: () => fs.rmSync(dataDir, { recursive: true, force: true }) };
+  const calls = [];
+  const fetchText = async (url) => { calls.push({ kind: 'text', url }); return { body: searchHtml() }; };
+  const fetchBytes = async (url) => { calls.push({ kind: 'image', url }); return { buffer: PNG }; };
+  const service = new StickerService(config, { client, fetchText, fetchBytes, makePreview: async () => JPEG, sleep: async () => {}, log: () => {} });
+  return { service, client, config, dataDir, calls, cleanup: () => fs.rmSync(dataDir, { recursive: true, force: true }) };
 }
 
 test('白名单：未列出的会话、deny 优先、空白名单默认拒绝', async () => {
@@ -131,19 +130,85 @@ test('记录的含义落盘，重启后仍在（跨会话复用）', async () =>
 test('收藏别人的表情：自己下载后 base64 上传，可写备注；不能收藏自己发的', async () => {
   const { service, client, cleanup } = setup();
   try {
-    client.msg = { self_id: 1, sender: { user_id: 2 }, message: [{ type: 'image', data: { url: 'https://cdn.example.com/x.png' } }] };
+    client.msg = { self_id: 1, message_type: 'group', group_id: 123, sender: { user_id: 2 }, message: [{ type: 'image', data: { url: 'https://cdn.example.com/x.png' } }] };
     const result = await service.collect({ target: 'group:123', messageId: 77, remark: '好图偷了' });
     assert.equal(result.emojiId, 'new1');
     assert.equal(client.added.length, 1);
     assert.equal(client.added[0], 'base64://' + PNG.toString('base64'));
     assert.deepEqual(client.modified[0], { id: 'new1', desc: '好图偷了' });
 
-    client.msg = { self_id: 1, sender: { user_id: 1 }, message: [{ type: 'image', data: { url: 'https://cdn.example.com/x.png' } }] };
+    client.msg = { self_id: 1, message_type: 'group', group_id: 123, sender: { user_id: 1 }, message: [{ type: 'image', data: { url: 'https://cdn.example.com/x.png' } }] };
     await assert.rejects(service.collect({ target: 'group:123', messageId: 78 }), /自己发的/);
 
-    client.msg = { self_id: 1, sender: { user_id: 2 }, message: [{ type: 'text', data: { text: 'hi' } }] };
+    client.msg = { self_id: 1, message_type: 'group', group_id: 123, sender: { user_id: 2 }, message: [{ type: 'text', data: { text: 'hi' } }] };
     await assert.rejects(service.collect({ target: 'group:123', messageId: 79 }), /没有可收藏/);
     await assert.rejects(service.collect({ target: 'group:999', messageId: 80 }), /白名单/);
+  } finally { cleanup(); }
+});
+
+test('跨会话收藏被拒绝：get_msg 能读任意消息，但必须属于目标会话', async () => {
+  const { service, client, cleanup } = setup();
+  try {
+    // 白名单里的群 123，但拿到的是一条属于群 999 的消息
+    client.msg = { self_id: 1, message_type: 'group', group_id: 999, sender: { user_id: 2 }, message: [{ type: 'image', data: { url: 'https://cdn.example.com/x.png' } }] };
+    await assert.rejects(service.collect({ target: 'group:123', messageId: 88 }), /不属于/);
+    assert.equal(client.added.length, 0);
+    // 私聊：拿群消息 / 别人的私聊都拒绝
+    client.msg = { self_id: 1, message_type: 'group', group_id: 123, sender: { user_id: 2 }, message: [{ type: 'image', data: { url: 'https://cdn.example.com/x.png' } }] };
+    await assert.rejects(service.collect({ target: 'private:456', messageId: 89 }), /不属于/);
+    client.msg = { self_id: 1, message_type: 'private', sender: { user_id: 777 }, message: [{ type: 'image', data: { url: 'https://cdn.example.com/x.png' } }] };
+    await assert.rejects(service.collect({ target: 'private:456', messageId: 90 }), /不属于/);
+    // 私聊对端发来的图可以收藏
+    client.msg = { self_id: 1, message_type: 'private', sender: { user_id: 456 }, message: [{ type: 'image', data: { url: 'https://cdn.example.com/x.png' } }] };
+    assert.equal((await service.collect({ target: 'private:456', messageId: 91 })).emojiId, 'new1');
+  } finally { cleanup(); }
+});
+
+test('并发发送时预算只放行一个（预占名额，不是发完才记账）', async () => {
+  const { service, client, cleanup } = setup({ sticker: { send: { minDelayMs: 0, maxDelayMs: 0, cooldownMs: 60000, maxPerHour: 1 } } });
+  try {
+    const results = await Promise.allSettled([
+      service.send({ target: 'group:123', stickerId: 'a' }),
+      service.send({ target: 'group:123', stickerId: 'b' })
+    ]);
+    assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
+    assert.equal(results.filter((r) => r.status === 'rejected').length, 1);
+    assert.equal(client.sent.length, 1, '同时发两张时必须只出去一张');
+  } finally { cleanup(); }
+});
+
+test('发送失败会回滚预算，不会把额度白吃掉', async () => {
+  const { service, client, cleanup } = setup({ sticker: { send: { minDelayMs: 0, maxDelayMs: 0, cooldownMs: 60000, maxPerHour: 1 } } });
+  try {
+    await assert.rejects(service.send({ target: 'group:123', stickerId: '不存在的表情' }), /找不到表情/);
+    assert.equal(client.sent.length, 0);
+    const ok = await service.send({ target: 'group:123', stickerId: 'a' });
+    assert.ok(ok.messageId);
+    assert.equal(client.sent.length, 1);
+  } finally { cleanup(); }
+});
+
+test('网关返回空收藏列表时不清空本地已有表情（坏响应不能抹掉 AI 记忆）', async () => {
+  const { service, client, cleanup } = setup();
+  try {
+    await service.syncFavorites(true);
+    const before = (await service.list({})).total;
+    assert.ok(before > 0);
+    client.faces = [];
+    await service.syncFavorites(true);
+    assert.equal((await service.list({})).total, before);
+  } finally { cleanup(); }
+});
+
+test('发送成功后统计失败不报错（否则调用方会重发一张）', async () => {
+  const { service, client, cleanup } = setup();
+  try {
+    await service.syncFavorites(true);
+    // 模拟统计数据落盘失败
+    service.saveStore = () => { throw new Error('disk full'); };
+    const sent = await service.send({ target: 'group:123', stickerId: 'a' });
+    assert.equal(sent.messageId, 901);
+    assert.equal(client.sent.length, 1);
   } finally { cleanup(); }
 });
 
@@ -166,15 +231,18 @@ test('提示词：包含可用表情与策略，连发文字后出现节奏提�
   } finally { cleanup(); }
 });
 
-test('收藏表情库损坏时只读运行，不覆盖损坏文件', async () => {
+test('收藏表情库损坏时只读运行，不覆盖损坏文件，写操作如实报错', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-sticker-corrupt-'));
   const file = path.join(dataDir, 'stickers.json');
   fs.writeFileSync(file, '{broken');
   const config = normalizeConfig({ allow: { groups: ['123'] }, dataDir }, { baseDir: dataDir, env: {} });
-  const service = new StickerService(config, { client: new FakeClient(), fetchBytes: async () => PNG, makePreview: async () => JPEG, sleep: async () => {}, log: () => {} });
+  const service = new StickerService(config, { client: new FakeClient(), fetchText: async () => ({ body: searchHtml() }), fetchBytes: async () => PNG, makePreview: async () => JPEG, sleep: async () => {}, log: () => {} });
   try {
     assert.equal(service.status().storeWritable, false);
     await service.syncFavorites(true);
+    assert.equal(fs.readFileSync(file, 'utf8'), '{broken');
+    // 只读时不能「假装保存成功」：否则调用方以为记下来了，重启后全丢。
+    await assert.rejects(service.note({ stickerId: 'a', note: '嘲讽用' }), /只读模式/);
     assert.equal(fs.readFileSync(file, 'utf8'), '{broken');
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
