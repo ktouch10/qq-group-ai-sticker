@@ -1,0 +1,62 @@
+{
+  "name": "qq-group-ai-sticker",
+  "version": "0.1.0",
+  "description": "QQ 群聊/私聊 AI 发表情包插件：QQ 收藏表情知识库 + 联网梗图搜索 + 看图理解 + MCP 工具，让 AI 像真人一样说几句话就配一张图。",
+  "type": "module",
+  "license": "MIT",
+  "author": "ktouch10",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ktouch10/qq-group-ai-sticker.git"
+  },
+  "homepage": "https://github.com/ktouch10/qq-group-ai-sticker#readme",
+  "bugs": {
+    "url": "https://github.com/ktouch10/qq-group-ai-sticker/issues"
+  },
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./mcp": "./src/mcp-server.js",
+    "./service": "./src/service.js"
+  },
+  "bin": {
+    "qq-sticker": "./src/cli.js"
+  },
+  "files": [
+    "src",
+    "config.example.json",
+    "examples",
+    "README.md",
+    "README.en.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "scripts": {
+    "start": "node src/mcp-server.js",
+    "mcp": "node src/mcp-server.js",
+    "cli": "node src/cli.js",
+    "test": "node --test --test-isolation=none test/*.test.mjs",
+    "test:watch": "node --test --watch test/*.test.mjs"
+  },
+  "keywords": [
+    "qq",
+    "sticker",
+    "表情包",
+    "meme",
+    "onebot",
+    "snowluma",
+    "mcp",
+    "mcp-server",
+    "ai-agent",
+    "chatbot"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "sharp": "^0.35.5",
+    "zod": "^4.4.3"
+  }
+}

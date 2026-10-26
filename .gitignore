@@ -1,0 +1,27 @@
+# 依赖
+node_modules/
+pnpm-lock.yaml
+package-lock.json
+
+# 运行数据：收藏表情库、联网梗图缓存、日志 —— 都属于「这台机器/这个 QQ 账号」的私有数据，绝不入库
+data/
+*.log
+*.tmp
+.sticker-data/
+
+# 本机配置（含 accessToken）
+config.json
+.env
+.npmrc
+
+# 打包/测试产物
+*.tgz
+coverage/
+.cache/
+test/.tmp/
+
+# 编辑器/系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,190 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { StickerService } from '../src/service.js';
+import { normalizeConfig } from '../src/config.js';
+
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+k3ioAAAAASUVORK5CYII=', 'base64');
+const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+const imageUrl = (n) => 'https://www.dogetu.com/data/doutula/' + n.toString(16).padStart(32, '0') + '.png';
+const searchHtml = (q = '开心') => '<div class="pic-list">' + [1, 2, 3, 4].map((n) => '<img src="' + imageUrl(n) + '" title="' + q + '">').join('') + '</div>';
+
+class FakeClient {
+  constructor() {
+    this.faces = [
+      { emoji_id: 'a', resId: 'a', url: 'https://cdn.example.com/a.png', md5: 'AA', desc: '笑死' },
+      { emoji_id: 'b', resId: 'b', url: 'https://cdn.example.com/b.png', md5: 'BB', desc: '' }
+    ];
+    this.sent = [];
+    this.added = [];
+    this.modified = [];
+    this.msg = null;
+    this.failFetch = false;
+  }
+  async fetchCustomFaces() {
+    if (this.failFetch) throw new Error('gateway down');
+    return this.faces;
+  }
+  async sendImage(args) { this.sent.push(args); return { message_id: 900 + this.sent.length }; }
+  async addCustomFace(file) { this.added.push(file); return { emoji_id: 'new1', desc: '' }; }
+  async modifyCustomFace(id, desc) { this.modified.push({ id, desc }); return {}; }
+  async getMsg() { return this.msg; }
+}
+
+function setup(overrides = {}) {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-sticker-svc-'));
+  const config = normalizeConfig(
+    {
+      allow: { groups: ['123'], private: ['456'] },
+      dataDir,
+      sticker: {
+        send: { minDelayMs: 0, maxDelayMs: 0, cooldownMs: 0, maxPerHour: 40 },
+        ...(overrides.sticker || {})
+      },
+      ...Object.fromEntries(Object.entries(overrides).filter(([k]) => k !== 'sticker'))
+    },
+    { baseDir: dataDir, env: {} }
+  );
+  const client = new FakeClient();
+  const fetchBytes = async (url) => {
+    if (String(url).includes('/search')) return { buffer: Buffer.from(searchHtml()) };
+    return { buffer: PNG };
+  };
+  const service = new StickerService(config, { client, fetchBytes, makePreview: async () => JPEG, sleep: async () => {}, log: () => {} });
+  return { service, client, config, dataDir, cleanup: () => fs.rmSync(dataDir, { recursive: true, force: true }) };
+}
+
+test('白名单：未列出的会话、deny 优先、空白名单默认拒绝', async () => {
+  const { service, cleanup } = setup();
+  try {
+    await assert.rejects(service.send({ target: 'group:999', stickerId: 'a' }), /不在 allow 白名单/);
+    await assert.rejects(service.send({ target: 'private:999', stickerId: 'a' }), /不在 allow 白名单/);
+    const denied = setup({ deny: { groups: ['123'], private: [] } });
+    try {
+      await assert.rejects(denied.service.send({ target: 'group:123', stickerId: 'a' }), /deny/);
+    } finally { denied.cleanup(); }
+    const empty = setup({ allow: { groups: [], private: [] }, allowAllWhenEmpty: false });
+    try {
+      await assert.rejects(empty.service.send({ target: 'group:123', stickerId: 'a' }), /allow 白名单为空/);
+    } finally { empty.cleanup(); }
+  } finally { cleanup(); }
+});
+
+test('发送收藏表情：一条 base64 图消息、下发目标是会话 key、并记录使用次数', async () => {
+  const { service, client, dataDir, cleanup } = setup();
+  try {
+    const result = await service.send({ target: 'group:123', stickerId: 'a', replyToMessageId: -5 });
+    assert.equal(result.messageId, 901);
+    assert.equal(client.sent.length, 1);
+    assert.equal(client.sent[0].target, 'group:123');
+    assert.equal(client.sent[0].replyToMessageId, -5);
+    assert.deepEqual(client.sent[0].buffer, PNG);
+    const store = JSON.parse(fs.readFileSync(path.join(dataDir, 'stickers.json'), 'utf8'));
+    const entry = store.find((e) => e.id === 'a');
+    assert.equal(entry.useCount, 1);
+  } finally { cleanup(); }
+});
+
+test('发送限流：最小间隔与每小时上限', async () => {
+  const cool = setup({ sticker: { send: { minDelayMs: 0, maxDelayMs: 0, cooldownMs: 60000, maxPerHour: 40 } } });
+  try {
+    await cool.service.send({ target: 'group:123', stickerId: 'a' });
+    await assert.rejects(cool.service.send({ target: 'group:123', stickerId: 'a' }), /太频繁/);
+  } finally { cool.cleanup(); }
+  const cap = setup({ sticker: { send: { minDelayMs: 0, maxDelayMs: 0, cooldownMs: 0, maxPerHour: 1 } } });
+  try {
+    await cap.service.send({ target: 'group:123', stickerId: 'a' });
+    await assert.rejects(cap.service.send({ target: 'group:123', stickerId: 'a' }), /达到上限/);
+  } finally { cap.cleanup(); }
+});
+
+test('联网新图：必须先看图才能发送，看过之后可发', async () => {
+  const { service, client, cleanup } = setup();
+  try {
+    const found = await service.find({ query: '开心', target: 'group:123' });
+    assert.equal(found.source, 'web');
+    const id = found.stickers[0].id;
+    await assert.rejects(service.send({ target: 'group:123', stickerId: id }), /sticker_preview/);
+    const preview = await service.preview({ stickerId: id, target: 'group:123' });
+    assert.equal(preview.image.mimeType, 'image/jpeg');
+    const sent = await service.send({ target: 'group:123', stickerId: id });
+    assert.equal(sent.stickerId, id);
+    assert.equal(client.sent.length, 1);
+  } finally { cleanup(); }
+});
+
+test('记录的含义落盘，重启后仍在（跨会话复用）', async () => {
+  const { service, config, dataDir, cleanup } = setup();
+  try {
+    const noted = await service.note({ stickerId: 'a', note: '嘲讽用', tags: ['怼人'], usage: '别人犯蠢时' });
+    assert.equal(noted.label, '嘲讽用');
+    const again = new StickerService(config, { client: new FakeClient(), fetchBytes: async () => PNG, makePreview: async () => JPEG, sleep: async () => {}, log: () => {} });
+    const list = await again.list({ query: '怼人' });
+    assert.equal(list.matched, 1);
+    assert.equal(list.stickers[0].localNote, '嘲讽用');
+    assert.ok(fs.existsSync(path.join(dataDir, 'stickers.json')));
+  } finally { cleanup(); }
+});
+
+test('收藏别人的表情：自己下载后 base64 上传，可写备注；不能收藏自己发的', async () => {
+  const { service, client, cleanup } = setup();
+  try {
+    client.msg = { self_id: 1, sender: { user_id: 2 }, message: [{ type: 'image', data: { url: 'https://cdn.example.com/x.png' } }] };
+    const result = await service.collect({ target: 'group:123', messageId: 77, remark: '好图偷了' });
+    assert.equal(result.emojiId, 'new1');
+    assert.equal(client.added.length, 1);
+    assert.equal(client.added[0], 'base64://' + PNG.toString('base64'));
+    assert.deepEqual(client.modified[0], { id: 'new1', desc: '好图偷了' });
+
+    client.msg = { self_id: 1, sender: { user_id: 1 }, message: [{ type: 'image', data: { url: 'https://cdn.example.com/x.png' } }] };
+    await assert.rejects(service.collect({ target: 'group:123', messageId: 78 }), /自己发的/);
+
+    client.msg = { self_id: 1, sender: { user_id: 2 }, message: [{ type: 'text', data: { text: 'hi' } }] };
+    await assert.rejects(service.collect({ target: 'group:123', messageId: 79 }), /没有可收藏/);
+    await assert.rejects(service.collect({ target: 'group:999', messageId: 80 }), /白名单/);
+  } finally { cleanup(); }
+});
+
+test('提示词：包含可用表情与策略，连发文字后出现节奏提示', async () => {
+  const { service, cleanup } = setup();
+  try {
+    await service.syncFavorites(true);
+    const plain = await service.prompt({ key: 'group:123' });
+    assert.match(plain, /可用表情包/);
+    assert.match(plain, /表情包策略/);
+    assert.match(plain, /sticker_send/);
+    assert.doesNotMatch(plain, /表情包节奏/);
+    service.noteTextSent('group:123');
+    service.noteTextSent('group:123');
+    const paced = await service.prompt({ key: 'group:123' });
+    assert.match(paced, /表情包节奏/);
+    const sent = await service.send({ target: 'group:123', stickerId: 'a' });
+    assert.ok(sent.messageId);
+    assert.doesNotMatch(await service.prompt({ key: 'group:123' }), /表情包节奏/, '发图后节奏计数应清零');
+  } finally { cleanup(); }
+});
+
+test('收藏表情库损坏时只读运行，不覆盖损坏文件', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-sticker-corrupt-'));
+  const file = path.join(dataDir, 'stickers.json');
+  fs.writeFileSync(file, '{broken');
+  const config = normalizeConfig({ allow: { groups: ['123'] }, dataDir }, { baseDir: dataDir, env: {} });
+  const service = new StickerService(config, { client: new FakeClient(), fetchBytes: async () => PNG, makePreview: async () => JPEG, sleep: async () => {}, log: () => {} });
+  try {
+    assert.equal(service.status().storeWritable, false);
+    await service.syncFavorites(true);
+    assert.equal(fs.readFileSync(file, 'utf8'), '{broken');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('网关同步失败时继续用本地缓存', async () => {
+  const { service, client, cleanup } = setup();
+  try {
+    await service.syncFavorites(true);
+    client.failFetch = true;
+    const list = await service.list({ query: '笑死' });
+    assert.equal(list.matched, 1);
+  } finally { cleanup(); }
+});

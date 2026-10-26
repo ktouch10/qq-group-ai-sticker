@@ -1,0 +1,39 @@
+{
+  "onebot": {
+    "httpUrl": "http://127.0.0.1:3000",
+    "accessToken": ""
+  },
+  "allow": {
+    "groups": ["123456789"],
+    "private": []
+  },
+  "deny": {
+    "groups": [],
+    "private": []
+  },
+  "allowAllWhenEmpty": false,
+  "dataDir": "./data",
+  "sticker": {
+    "enabled": true,
+    "syncTtlMs": 60000,
+    "maxListCount": 100,
+    "web": {
+      "enabled": true
+    },
+    "send": {
+      "minDelayMs": 800,
+      "maxDelayMs": 2000,
+      "cooldownMs": 20000,
+      "maxPerHour": 40
+    },
+    "collect": {
+      "maxRemarkChars": 20
+    },
+    "remark": {
+      "enabled": false
+    },
+    "preview": {
+      "enabled": true
+    }
+  }
+}
