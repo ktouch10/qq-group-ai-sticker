@@ -39,8 +39,8 @@
     "start": "node src/mcp-server.js",
     "mcp": "node src/mcp-server.js",
     "cli": "node src/cli.js",
-    "test": "node --test --test-isolation=none test/*.test.mjs",
-    "test:watch": "node --test --watch test/*.test.mjs"
+    "test": "node --test",
+    "test:watch": "node --test --watch"
   },
   "keywords": [
     "qq",
