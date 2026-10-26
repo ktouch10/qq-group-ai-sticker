@@ -1,5 +1,11 @@
 # QQ 群聊 AI 发表情包插件（qq-group-ai-sticker）
 
+[![ci](https://github.com/ktouch10/qq-group-ai-sticker/actions/workflows/ci.yml/badge.svg)](https://github.com/ktouch10/qq-group-ai-sticker/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![node](https://img.shields.io/badge/node-%3E%3D20.10-339933.svg)](package.json)
+
+**中文** | [English](README.en.md)
+
 > 让 QQ 群聊 / 私聊里的 AI 像真人一样**说几句话就顺手甩一张表情包**：记得自己有哪些收藏、看得懂梗图、
 > 会按情绪搜现成的梗、还会把「这张图是什么梗、什么时候用」记下来，下次换个群也能直接用。
 

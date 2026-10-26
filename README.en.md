@@ -1,11 +1,15 @@
 # QQ Group AI Sticker
 
+[![ci](https://github.com/ktouch10/qq-group-ai-sticker/actions/workflows/ci.yml/badge.svg)](https://github.com/ktouch10/qq-group-ai-sticker/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![node](https://img.shields.io/badge/node-%3E%3D20.10-339933.svg)](package.json)
+
+[中文说明](README.md) | **English**
+
 > An **MCP plugin + Node library** that lets an AI in QQ group chats / DMs send stickers like a human:
 > it remembers which custom stickers the account owns, actually *looks* at a meme before sending it,
 > searches public meme sites when it lacks one, and records what each sticker means so it can be reused
 > in another chat later.
-
-[中文说明](README.md)
 
 ```
 QQ chat ──► SnowLuma (OneBot v11) ──► this plugin ◄──► AI host (MCP)
