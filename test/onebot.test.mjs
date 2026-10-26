@@ -81,15 +81,19 @@ test('sendImage 用 base64 传输、一条消息一张图，并按会话类型�
     assert.equal(seen[0].body.message.length, 1);
     assert.equal(seen[0].body.message[0].data.file, 'base64://' + buffer.toString('base64'));
 
-    await client.sendImage({ target: 'private:456', buffer, replyToMessageId: -7, atUserId: 10001 });
+    await client.sendImage({ target: 'private:456', buffer, replyToMessageId: -7 });
     assert.equal(seen[1].url, '/send_private_msg');
     assert.equal(seen[1].body.user_id, 456);
-    assert.deepEqual(seen[1].body.message.map((s) => s.type), ['reply', 'at', 'image']);
+    assert.deepEqual(seen[1].body.message.map((s) => s.type), ['reply', 'image']);
     assert.equal(seen[1].body.message[0].data.id, '-7');
-    assert.equal(seen[1].body.message[1].data.qq, '10001');
+
+    await client.sendImage({ target: 'group:123', buffer, atUserId: 10001 });
+    assert.deepEqual(seen[2].body.message.map((s) => s.type), ['at', 'image']);
+    assert.equal(seen[2].body.message[0].data.qq, '10001');
 
     await assert.rejects(client.sendImage({ target: 'group:123', buffer, replyToMessageId: 0 }), /非零整数/);
     await assert.rejects(client.sendImage({ target: 'group:123', buffer, atUserId: 'all' }), /不能为 all/);
+    await assert.rejects(client.sendImage({ target: 'private:456', buffer, atUserId: 10001 }), /私聊不支持/);
     await assert.rejects(client.sendImage({ target: 'group:123', buffer: Buffer.alloc(0) }), /缺少/);
     await assert.rejects(client.sendImage({ target: 'group:0', buffer }), /会话标识/);
   } finally { server.close(); }
@@ -98,4 +102,42 @@ test('sendImage 用 base64 传输、一条消息一张图，并按会话类型�
 test('连不上网关时给出排查提示而不是裸 fetch 错误', async () => {
   const client = new OneBotClient({ httpUrl: 'http://127.0.0.1:1', timeoutMs: 1500 });
   await assert.rejects(client.getMsg(1), /OneBot|请求失败/);
+});
+
+test('at 号必须是规范正整数；私聊不允许 @', async () => {
+  const seen = [];
+  const server = await startServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => { seen.push(JSON.parse(body)); res.end(JSON.stringify({ status: 'ok', retcode: 0, data: { message_id: 1 } })); });
+  });
+  try {
+    const client = new OneBotClient({ httpUrl: urlOf(server) });
+    const buffer = Buffer.from([1]);
+    await assert.rejects(client.sendImage({ target: 'group:123', buffer, atUserId: '00' }), /正整数/);
+    await assert.rejects(client.sendImage({ target: 'group:123', buffer, atUserId: '007' }), /正整数/);
+    await assert.rejects(client.sendImage({ target: 'private:456', buffer, atUserId: 10001 }), /私聊不支持/);
+    assert.equal(seen.length, 0, '参数非法时不应该发出任何请求');
+  } finally { server.close(); }
+});
+
+test('网关返回 null / 非 JSON 时不抛 TypeError', async () => {
+  const server = await startServer((req, res) => res.end('null'));
+  try {
+    const client = new OneBotClient({ httpUrl: urlOf(server) });
+    await assert.rejects(client.getMsg(1), /OneBot get_msg 失败/);
+  } finally { server.close(); }
+});
+
+test('getMsg 拒绝超出安全整数范围的消息 id', async () => {
+  const client = new OneBotClient({ httpUrl: 'http://127.0.0.1:1', timeoutMs: 500 });
+  await assert.rejects(client.getMsg('9007199254740993'), /安全/);
+});
+
+test('get_login_info 用于识别本机 QQ 号', async () => {
+  const server = await startServer((req, res) => res.end(JSON.stringify({ status: 'ok', retcode: 0, data: { user_id: 123456, nickname: 'bot' } })));
+  try {
+    const client = new OneBotClient({ httpUrl: urlOf(server) });
+    assert.equal((await client.getLoginInfo()).user_id, 123456);
+  } finally { server.close(); }
 });

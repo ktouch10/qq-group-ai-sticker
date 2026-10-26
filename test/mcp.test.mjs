@@ -117,3 +117,30 @@ test('默认配置下不暴露改官方备注的工具（写操作默认关闭�
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('开启改备注后，sticker_remark 要求 target 并通过白名单', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-sticker-mcp-remark-'));
+  const file = path.join(dir, 'config.json');
+  fs.writeFileSync(file, JSON.stringify({
+    onebot: { httpUrl: 'http://127.0.0.1:1', accessToken: '' },
+    allow: { groups: ['123'], private: [] },
+    dataDir: './data',
+    sticker: { remark: { enabled: true } }
+  }));
+  const server = startServer(file);
+  try {
+    await server.request('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 't', version: '0' } });
+    server.notify('notifications/initialized');
+    const tools = await server.request('tools/list', {});
+    const remark = tools.tools.find((tool) => tool.name === 'sticker_remark');
+    assert.ok(remark, '开启后应注册 sticker_remark');
+    assert.ok(remark.inputSchema.required.includes('target'), 'target 必须是必填参数');
+
+    const denied = await server.request('tools/call', { name: 'sticker_remark', arguments: { target: 'group:999', stickerId: 'a', remark: 'x' } });
+    assert.equal(denied.isError, true);
+    assert.match(denied.content[0].text, /白名单/);
+  } finally {
+    await server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

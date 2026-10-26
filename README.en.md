@@ -41,7 +41,7 @@ self-downloaded image bytes, and prompt-injection hardening.
 - **Humanized pacing**: 0.8–2 s random delay before sending, per-chat cooldown and hourly cap, plus a soft "you have not sent a sticker in a while" hint.
 - **Secure by default**: allowlist for send/collect/remark; image bytes are fetched in-process behind SSRF protection and sent as base64 (URLs are never handed to the gateway); sticker notes are flattened to one line and explicitly framed as *data, not instructions*.
 - **Two ways to use it**: MCP server for any MCP host, or a plain Node library.
-- **61 tests**: quotas, cache eviction, concurrency, allowlist, SSRF helpers, corrupt-store protection, MCP end-to-end.
+- **84 tests**: quotas, cache eviction, concurrency, allowlist, SSRF (`isPrivateIp` / DNS / redirects / decompression caps), corrupt-store protection, MCP end-to-end.
 
 ## Quick start
 
@@ -112,6 +112,12 @@ One more thing that is easy to miss: `sticker_send` / `sticker_find` need to kno
 Tell the model the current chat key in the prompt (e.g. `current chat: group:123456789`), otherwise it cannot
 fill `target` — the allowlist blocks wrong numbers, but only you can tell it the right one.
 
+> ⚠️ **Two writers will overwrite each other.** If you already run the plugin as an MCP server (a child process),
+> do **not** instantiate a default `new StickerService(...)` in the host process against the same `dataDir` —
+> both processes read and write `stickers.json`, and the last write wins. Build the prompt in read-only mode:
+> `new StickerService(loadConfig(), { writeStore: false })`, or just use `node src/cli.js prompt`.
+> Read-only mode never creates or modifies the store file.
+
 ## MCP tools
 
 | Tool | Purpose | Constraint |
@@ -122,7 +128,7 @@ fill `target` — the allowlist blocks wrong numbers, but only you can tell it t
 | `sticker_send` | Send one sticker to a chat | one per bubble; allowlist + cooldown + hourly cap |
 | `sticker_note` | Record meaning / mood tags / usage | shared across chats, persisted |
 | `sticker_collect` | Add someone else's image to QQ custom stickers | image downloaded by the plugin, not the gateway |
-| `sticker_remark` | Edit the official QQ sticker remark | **write operation, disabled by default** |
+| `sticker_remark` | Edit the official QQ sticker remark | **write operation, disabled by default**; when enabled it still needs `target` + allowlist |
 
 ## Configuration
 
@@ -149,7 +155,7 @@ fill `target` — the allowlist blocks wrong numbers, but only you can tell it t
 - Only **1–16 character public mood words** leave the machine when searching two fixed sites (`dogetu.com`, `fabiaoqing.com`). Never chat text, names or QQ numbers.
 - Image bytes are downloaded by the plugin behind SSRF protection (DNS pinning, per-hop validation, size caps) and sent to QQ as `base64://` through your own gateway.
 - No telemetry, no analytics, no reporting.
-- Defaults: 1 sticker / 20 s and 40 / hour per chat; web search 3 / hour per chat and 12 / hour globally; preview 3 / hour per chat; 32 MB / 120-item / 30-day image cache; max 4 queued jobs.
+- Defaults: 1 sticker / 20 s and 40 / hour per chat; web search 3 / hour per chat and 12 / hour globally; preview 3 / hour per chat; 32 MB / 120-item / 30-day image cache; max 4 queued jobs; concurrent syncs are coalesced and a forced sync hits the gateway at most once per 3 s.
 
 See [SECURITY.md](SECURITY.md) for the full boundary list.
 

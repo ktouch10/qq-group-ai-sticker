@@ -201,3 +201,21 @@ test('在一个会话看过的图，可以在另一个会话直接发送（看�
   // 换一个进程（token 不同）就必须重新看
   await assert.rejects(lib.image(id, { owner: 'group:222', token: 'other-process' }), /sticker_preview/);
 }));
+
+test('库级直接调用不传 owner/token 也不会崩（默认 local / 空 token）', () => fixture(async ({ lib }) => {
+  const id = (await lib.find('开心')).stickers[0].id;
+  const preview = await lib.preview(id);
+  assert.equal(preview.image.mimeType, 'image/jpeg');
+  assert.ok((await lib.image(id)).buffer.length > 0);
+  assert.equal(lib.note(id, { note: '开心' }).needsPreview, false);
+}));
+
+test('缓存文件是半截/0 字节时不算命中，会重新下载', () => fixture(async ({ lib, root, calls }) => {
+  const id = (await lib.find('开心', ctx)).stickers[0].id;
+  await lib.preview(id, ctx);
+  const dir = path.join(root, 'web-stickers-cache');
+  fs.writeFileSync(path.join(dir, id.slice(4) + '.image'), Buffer.alloc(0));
+  const before = calls.filter((c) => c.kind === 'image').length;
+  await lib.preview(id, ctx);
+  assert.ok(calls.filter((c) => c.kind === 'image').length > before, '半截缓存应被重新下载覆盖');
+}));

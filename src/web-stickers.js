@@ -115,7 +115,7 @@ export function createWebStickerLibrary({ root, fetchBytes = safeFetchBytes, fet
       return keep;
     });
     // 只清理本库自己的哈希文件名；写入中断留下的残片也一并收掉，其他文件不动。
-    try{for(const name of fs.readdirSync(directory))if(/^[0-9a-f]{24}\.(image|jpg)$/.test(name)&&!state.entries.some(e=>name.startsWith(e.id.slice(4)+'.')))fs.unlinkSync(path.join(directory,name));}catch{}
+    try{for(const name of fs.readdirSync(directory)){if(/^[0-9a-f]{24}\.(image|jpg)\.[0-9a-f]{12}\.tmp$/.test(name)){try{fs.unlinkSync(path.join(directory,name));}catch{}continue;}if(/^[0-9a-f]{24}\.(image|jpg)$/.test(name)&&!state.entries.some(e=>name.startsWith(e.id.slice(4)+'.')))fs.unlinkSync(path.join(directory,name));}}catch{}
   }
   function concise(e) { return { id:e.id,label:sanitizeStickerText(e.note||e.title,36),...(e.reviewed?{tags:(e.tags||[]).slice(0,3),usage:sanitizeStickerText(e.usage,36)}:{}),source:e.source,needsPreview:!e.reviewed }; }
   const output = (entries, source, note='') => ({ source, stickers:entries.slice(0,3).map(concise), ...(note?{note}:{}) });
@@ -149,23 +149,41 @@ export function createWebStickerLibrary({ root, fetchBytes = safeFetchBytes, fet
       clean();save();return output(results.map(r=>entry(r.id)),'web',results.length?'新图先用 sticker_preview 看一张，再发送并用 sticker_note 记短标签以便复用':(success?'没有合适结果':'来源暂不可用')+'，本轮用收藏或文字，不连续重试');
     });
   }
+  // 写缓存文件必须原子：进程被杀/断电时留下半截文件，下一次请求会因为「文件已存在」直接复用坏图。
+  function writeAtomic(file, buffer) {
+    const tmp = `${file}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    try { fs.writeFileSync(tmp, buffer, { mode: 0o600 }); fs.renameSync(tmp, file); }
+    catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
+  }
+  // 文件存在且非空；原始图还要校验图片魔数，避免把半截/错误内容当成缓存命中。
+  function cachedOk(file, checkMagic = false) {
+    try {
+      if (fs.statSync(file).size <= 0) return false;
+      if (!checkMagic) return true;
+      const fd = fs.openSync(file, 'r');
+      try {
+        const head = Buffer.alloc(12);
+        return fs.readSync(fd, head, 0, 12, 0) === 12 && looksLikeImageBuffer(head);
+      } finally { fs.closeSync(fd); }
+    } catch { return false; }
+  }
   async function prepare(e,guard) {
     const original=asset(e.id,'.image'),preview=asset(e.id,'.jpg');
-    if(fs.existsSync(original)&&fs.existsSync(preview))return;
+    if(cachedOk(original,true)&&cachedOk(preview))return;
     fs.mkdirSync(directory,{recursive:true});
     const r=await fetchBytes(e.url,LIMIT.image,{timeoutMs:12000});guard();
     if(!looksLikeImageBuffer(r.buffer))throw new Error('表情来源没有返回 PNG/JPEG/GIF/WebP 图片');
-    fs.writeFileSync(original,r.buffer,{mode:0o600});
     try{
+      writeAtomic(original,r.buffer);
       const jpeg=await makePreview(r.buffer,{guard});guard();
       if(!jpeg?.length||jpeg.length>160*1024)throw new Error('缩略预览生成失败或超限');
-      fs.writeFileSync(preview,jpeg,{mode:0o600});
+      writeAtomic(preview,jpeg);
     }catch(e){for(const p of [original,preview])try{fs.unlinkSync(p);}catch{}throw e;}
   }
   // 「这张图当前进程已经看过」的许可。按 token（= 一次进程启动）而不是按会话记账：
   // 同一个 MCP server 就是同一个调用方，按会话切分只会让模型「在 A 会话看了、在 B 会话发」
   // 时莫名报错，反而诱导它重复看图。额度仍然按会话（owner）计。
-  const ticket=(owner,token,id)=>digest(token)+'#'+id;
+  const ticket=(owner,token,id)=>digest(String(token ?? ''))+'#'+id;
   async function preview(id,{owner,token,guard=()=>{}}={}){
     return serialize(async()=>{
       guard();ensureWritable();clean();const e=entry(id),t=ticket(owner,token,id);

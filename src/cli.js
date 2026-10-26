@@ -37,7 +37,11 @@ const args = parseArgs(argv);
 const configFile = args.config && args.config !== true ? String(args.config) : (process.env.STICKER_CONFIG || path.resolve('config.json'));
 const command = args._[0] || 'status';
 const config = loadConfig(configFile);
-const service = new StickerService(config, { log: (message) => console.error(`[qq-sticker] ${message}`) });
+// prompt 只读：它常被宿主的「拼提示词」流程顺手调用，不能和正在跑的 MCP 进程抢写同一个库文件。
+const service = new StickerService(config, {
+  ...(command === 'prompt' ? { writeStore: false } : {}),
+  log: (message) => console.error(`[qq-sticker] ${message}`)
+});
 
 function out(value) {
   process.stdout.write((typeof value === 'string' ? value : JSON.stringify(value, null, 2)) + '\n');

@@ -86,11 +86,11 @@ export class StickerPace {
  * @param {number} [options.max] 列表里最多展示几个表情
  * @returns {string} 可直接拼进系统提示词的文本；没有内容时返回空串
  */
-export function buildStickerPrompt({ entries = [], key, pace, online = true, max = 8 } = {}) {
+export function buildStickerPrompt({ entries = [], key, pace, online = true, preview = true, max = 4 } = {}) {
   const parts = [];
   const context = buildStickerContext(entries, max);
   if (context) parts.push(context);
-  parts.push(buildStickerStrategyHint(online));
+  parts.push(buildStickerStrategyHint(online, { preview }));
   if (key && pace) {
     const hint = pace.hint(key);
     if (hint) parts.push(hint);

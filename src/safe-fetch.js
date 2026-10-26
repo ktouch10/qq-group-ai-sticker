@@ -275,7 +275,7 @@ function requestOnce(url, ip, limit, binary = false, options = {}) {
               : encoding.includes('gzip') ? ['gunzip', 'inflate']
                 : encoding.includes('deflate') ? ['inflate', 'gunzip']
                   : [];
-            let decoded = null;
+            let decoded = null, overflow = false;
             for (const kind of candidates) {
               try {
                 // 允许尾部有少量脏字节：很多站点会多带换行/填充。
@@ -285,7 +285,17 @@ function requestOnce(url, ip, limit, binary = false, options = {}) {
                   : kind === 'gunzip' ? zlib.gunzipSync(raw, opt)
                     : zlib.inflateSync(raw, opt);
                 break;
-              } catch { /* 试下一种 */ }
+              } catch (error) {
+                // 超过 maxOutputLength 时不能把压缩字节当正文交给调用方（那会变成一堆乱码/坏图）。
+                if (error?.code === 'ERR_BUFFER_TOO_LARGE' || /too large|larger than|output length|outputLength/i.test(String(error?.message))) {
+                  overflow = true;
+                }
+                /* 否则试下一种编码 */
+              }
+            }
+            if (!decoded && overflow) {
+              finish(new Error('响应体解压后超过大小限制'));
+              return;
             }
             if (decoded) raw = decoded;
           }

@@ -11,6 +11,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { loadConfig } from './config.js';
 import { StickerService } from './service.js';
+import { sanitizeStickerText } from './sticker-store.js';
 
 function argValue(argv, name, fallback) {
   const idx = argv.indexOf(name);
@@ -25,7 +26,7 @@ const config = loadConfig(configFile);
 // 注意：stdio 传输下 stdout 属于协议通道，日志只能走 stderr。
 const service = new StickerService(config, { log: (message) => console.error(`[qq-sticker] ${message}`) });
 
-const server = new McpServer({ name: 'qq-group-ai-sticker', version: '0.1.1' });
+const server = new McpServer({ name: 'qq-group-ai-sticker', version: '0.1.2' });
 
 const text = (value) => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 1) }] });
 const fail = (error) => ({ content: [{ type: 'text', text: `失败：${error?.message ?? error}` }], isError: true });
@@ -92,7 +93,7 @@ server.tool(
         content: [
           {
             type: 'text',
-            text: `表情 ${data.sticker.id}${data.sticker.label ? '（标签：' + data.sticker.label + '）' : ''} 的图片内容：动图已取三帧拼成一张。`
+            text: `表情 ${sanitizeStickerText(data.sticker.id, 80)}${data.sticker.label ? '（标签：' + sanitizeStickerText(data.sticker.label, 60) + '）' : ''} 的图片内容：动图已取三帧拼成一张。`
           },
           { type: 'image', mimeType: data.image.mimeType, data: data.image.data }
         ]
@@ -155,14 +156,15 @@ server.tool(
 if (config.sticker.remark.enabled === true) {
   server.tool(
     'sticker_remark',
-    '修改 QQ 账号里收藏表情的官方备注（写操作，默认关闭）。一般应优先用 sticker_note 记本机理解，不要随意改动账号里的官方备注。',
+    '修改 QQ 账号里收藏表情的官方备注（写操作，默认关闭）。这是账号级改动，所以同样要传 target 并通过 allow 白名单。一般应优先用 sticker_note 记本机理解，不要随意改动账号里的官方备注。',
     {
+      target: z.string().min(1).max(64).describe('会话标识 group:123456 / private:7890（必须在 allow 白名单里）'),
       stickerId: z.string().min(1).max(128).describe('表情标识，来自 sticker_list'),
       remark: z.string().max(50).describe('新的官方备注（≤50 字）')
     },
-    async ({ stickerId, remark }) => {
+    async ({ target, stickerId, remark }) => {
       try {
-        return text({ ok: true, ...(await service.remark({ stickerId, remark })) });
+        return text({ ok: true, ...(await service.remark({ target, stickerId, remark })) });
       } catch (error) { return fail(error); }
     }
   );

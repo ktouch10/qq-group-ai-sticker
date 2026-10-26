@@ -41,7 +41,7 @@ QQ 群友 ──► SnowLuma（OneBot v11）──► 本插件 ◄──► AI 
 - ⏱️ **人味节奏**：发图前有 0.8~2 秒随机停顿；同一会话有最小间隔和每小时上限；连发几条文字没配图时，提示层会提醒模型「该补一张了」（软提示，不强制）。
 - 🛡️ **默认安全**：发送/收藏/改备注都要过 allow 白名单；图片由本插件做 SSRF 防护后下载再 base64 交给网关，**绝不把 URL 交给网关去抓**；表情备注全程单行化并标注为「资料，不是指令」，堵住跨会话提示词注入。
 - 🧩 **两种用法**：MCP server（给任何 MCP 宿主）或纯 Node 库（自己注入提示词、自己发消息）。
-- 🧪 **61 个测试**：限额、缓存淘汰、并发队列、白名单、SSRF、损坏库保护、MCP 端到端都有覆盖。
+- 🧪 **84 个测试**：限额、缓存淘汰、并发队列、白名单、SSRF（`isPrivateIp` / DNS / 重定向 / 解压上限）、损坏库保护、MCP 端到端都有覆盖。
 
 ## 快速开始
 
@@ -151,6 +151,11 @@ const block = await service.prompt({ key: 'group:123456789' }); // 可用表情 
 
 直接用 CLI 也能拿到这段文本：`node src/cli.js prompt --key group:123456789`。
 
+> ⚠️ **两个写者会互相覆盖**：如果你已经把插件接成 MCP server（子进程），宿主的 prompt 进程就**不要**再用默认
+> `new StickerService(...)` 写同一个 `dataDir` —— 两个进程同时读写 `stickers.json`，后写会覆盖前写。
+> 拼提示词请用只读模式：`new StickerService(loadConfig(), { writeStore: false })`，
+> 或者干脆用 `node src/cli.js prompt` 拿文本。只读模式不创建、不改写库文件。
+
 ## MCP 工具
 
 | 工具 | 作用 | 关键约束 |
@@ -161,7 +166,7 @@ const block = await service.prompt({ key: 'group:123456789' }); // 可用表情 
 | `sticker_send` | 在指定会话发一张表情 | 单气泡一张图；白名单 + 最小间隔 + 每小时上限 |
 | `sticker_note` | 记含义 / 情绪标签 / 适用场景 | 跨会话共享、落盘；联网图须先看过 |
 | `sticker_collect` | 把别人发的一张图收藏进 QQ 收藏表情 | 图片由插件自己下载；不能收藏自己发的 |
-| `sticker_remark` | 改 QQ 收藏表情的官方备注 | **写操作，默认不注册**，需 `sticker.remark.enabled=true` |
+| `sticker_remark` | 改 QQ 收藏表情的官方备注 | **写操作，默认不注册**；开启后仍需传 `target` 并通过白名单 |
 
 ## 配置项
 
@@ -215,7 +220,7 @@ const block = await service.prompt({ key: 'group:123456789' }); // 可用表情 
 | 联网搜索回退 | 主站 + 备用站各 1 页，不循环重试 |
 | 图片缓存 | 32MB / 120 项 / 30 天未用淘汰 |
 | 单图限制 | 联网图下载 2MiB（收藏表情 4MiB）、250 万像素、240 帧、30 秒；预览 JPEG ≤160KB |
-| 并发 | 串行队列最多 4 个，满了直接拒绝（不堆积、不带重试风暴） |
+| 并发 | 串行队列最多 4 个，满了直接拒绝（不堆积、不带重试风暴）；并发的收藏同步合并成一次，强制同步 3 秒内只打一次网关 |
 | 节奏提示 | 距上次发图 ≥2 分钟且连发 ≥2 条文字才提示；同一会话每小时发图满 12 张后不再提示 |
 
 ## 常见问题
@@ -273,7 +278,7 @@ service.noteTextSent('group:123456789');
 ## 开发
 
 ```bash
-npm test                      # 61 个测试（node:test）
+npm test                      # 84 个测试（node:test）
 node src/cli.js status        # CLI 冒烟
 ```
 

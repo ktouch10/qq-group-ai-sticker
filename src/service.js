@@ -33,6 +33,8 @@ import { StickerPace, buildStickerPrompt } from './policy.js';
 const BYTE_CACHE_TTL_MS = 10 * 60 * 1000;
 const BYTE_CACHE_MAX = 20;
 const BYTE_CACHE_MAX_BYTES = 24 * 1024 * 1024;
+// 强制同步的最小间隔：模型可能拿不存在的 id 连续重试，不能每次都打网关。
+const FORCED_SYNC_MIN_MS = 3000;
 
 function randInt(min, max) {
   const lo = Math.ceil(min), hi = Math.floor(max);
@@ -69,9 +71,20 @@ export class StickerService {
       this.storeWritable = false; // 读坏了就绝不回写，避免把「损坏」当成「空库」落盘
       this.log(`表情库读取失败，本次以只读方式运行：${error?.message ?? error}`);
     }
+    if (deps.writeStore === false) {
+      // 宿主进程只用来拼提示词时用这个模式：避免和 MCP 子进程同时写同一个 stickers.json。
+      this.storeWritable = false;
+      this.log('以只读方式运行（writeStore=false）：只读库与拼提示词，不回写 stickers.json');
+    }
     this.syncedAt = 0;
+    this.syncInFlight = null;
+    this.forcedSyncAt = 0;
+    this.botUserId = undefined;
 
-    this.webLibrary = config.sticker.enabled && config.sticker.web?.enabled
+    // 看图关闭时联网搜图也一起关掉：联网新图必须先看图才能发送，
+    // 否则 find 会返回一堆「看不了也发不了」的候选，白白浪费额度与上下文。
+    const webEnabled = config.sticker.enabled && config.sticker.web?.enabled && config.sticker.preview?.enabled !== false;
+    this.webLibrary = webEnabled
       ? createWebStickerLibrary({
           root: this.dataDir,
           fetchBytes: this.fetchBytes,
@@ -143,12 +156,23 @@ export class StickerService {
     }
     times.push(now);
     this.sendTimes.set(key, times);
-    return () => {
-      const list = this.sendTimes.get(key);
-      if (!Array.isArray(list)) return;
-      const idx = list.lastIndexOf(now);
-      if (idx >= 0) list.splice(idx, 1);
+    return {
+      at: now,
+      rollback: () => {
+        const list = this.sendTimes.get(key);
+        if (!Array.isArray(list)) return;
+        const idx = list.lastIndexOf(now);
+        if (idx >= 0) list.splice(idx, 1);
+      }
     };
+  }
+
+  /** 发送成功后把「预占时刻」改成「真实发出时刻」，冷却才从真正发出去那一刻算。 */
+  #settleSendBudget(key, reservedAt) {
+    const list = this.sendTimes.get(key);
+    if (!Array.isArray(list)) return;
+    const idx = list.lastIndexOf(reservedAt);
+    if (idx >= 0) list[idx] = this.now();
   }
 
   // ── QQ 收藏表情 ─────────────────────────────────────────────────────────
@@ -159,10 +183,26 @@ export class StickerService {
    */
   async syncFavorites(force = false) {
     if (this.config.sticker.enabled === false) return null;
+    // 并发同步合并成一次：模型连续几次调用不该把网关打满。
+    if (this.syncInFlight) return this.syncInFlight;
     const ttl = this.config.sticker.syncTtlMs;
     if (!force && this.syncedAt && this.now() - this.syncedAt < ttl) {
       return { entries: this.entries, syncedAt: this.syncedAt, fromCache: true };
     }
+    // 强制同步也要节流：模型拿不存在的 id 反复试时，不能每次都真的去打网关（单次最长可等 15 秒）。
+    if (force && this.forcedSyncAt && this.now() - this.forcedSyncAt < FORCED_SYNC_MIN_MS) {
+      return { entries: this.entries, syncedAt: this.syncedAt, fromCache: true, throttled: true };
+    }
+    if (force) this.forcedSyncAt = this.now();
+    this.syncInFlight = this.#syncOnce();
+    try {
+      return await this.syncInFlight;
+    } finally {
+      this.syncInFlight = null;
+    }
+  }
+
+  async #syncOnce() {
     try {
       const fetched = await this.client.fetchCustomFaces(this.config.sticker.maxListCount);
       // 「拉到空列表」不能证明账号里没有收藏：网关异常、风控、账号切换都可能返回空数组。
@@ -329,11 +369,11 @@ export class StickerService {
   async send({ target, stickerId, replyToMessageId, atUserId } = {}) {
     this.assertStickerEnabled();
     const { key } = this.assertAllowed(target, '发表情');
-    // 先同步预占限流名额；中途任何一步失败都回滚，成功则占位即发送记录。
-    const rollback = this.assertSendBudget(key);
+    // 先同步预占限流名额；中途任何一步失败都回滚，成功则把占位时刻改成真实发出时刻。
+    const budget = this.assertSendBudget(key);
     const id = String(stickerId ?? '').trim();
     if (!id) {
-      rollback();
+      budget.rollback();
       throw new Error('缺少 stickerId');
     }
 
@@ -356,6 +396,7 @@ export class StickerService {
       this.assertAllowed(target, '发表情');
 
       const data = await this.client.sendImage({ target: key, buffer, replyToMessageId, atUserId });
+      this.#settleSendBudget(key, budget.at);
       this.pace.noteSticker(key);
       // 已经真实发出去了：统计失败绝不能让调用方以为发送失败而重发一张。
       try {
@@ -370,7 +411,7 @@ export class StickerService {
       }
       return { target: key, stickerId: id, messageId: data?.message_id ?? null };
     } catch (error) {
-      rollback();
+      budget.rollback();
       throw error;
     }
   }
@@ -396,10 +437,11 @@ export class StickerService {
    * 只校验 target 在白名单里，等于允许一个群里的模型去翻别的群/私聊的图，
    * 再收藏进这个 QQ 账号 —— 跨会话越权。
    */
-  #assertMessageBelongsTo(message, { kind, id, key, mid }) {
+  #assertMessageBelongsTo(message, { kind, id, key, mid, botId = '' }) {
     const type = String(message?.message_type || (message?.group_id ? 'group' : 'private'));
     const sender = String(message?.sender?.user_id ?? '');
-    const selfId = String(message?.self_id ?? '');
+    // 标准 OneBot v11 的 get_msg 不返回 self_id，所以优先用 get_login_info 拿到的本机 QQ 号判断「自己」。
+    const selfId = String(message?.self_id ?? '') || botId;
     if (kind === 'group') {
       if (type !== 'group' || String(message?.group_id ?? '') !== id) {
         throw new Error(`消息 ${mid} 不属于 ${key}，拒绝跨会话收藏`);
@@ -409,6 +451,19 @@ export class StickerService {
     }
     if (type === 'group' || sender !== id) throw new Error(`消息 ${mid} 不属于 ${key}，拒绝跨会话收藏`);
     if (selfId && sender === selfId) throw new Error('不能收藏自己发的表情，只能收藏别人发的');
+  }
+
+  /** 缓存本机 QQ 号；拿不到时返回空串（此时只能依赖消息里的 self_id）。 */
+  async #botUserId() {
+    if (this.botUserId !== undefined) return this.botUserId;
+    try {
+      const info = await this.client.getLoginInfo?.();
+      this.botUserId = String(info?.user_id ?? '') || '';
+    } catch (error) {
+      this.log(`取登录账号信息失败，收藏时无法识别自己发的消息：${error?.message ?? error}`);
+      this.botUserId = '';
+    }
+    return this.botUserId;
   }
 
   /**
@@ -421,7 +476,10 @@ export class StickerService {
     const mid = String(messageId ?? '').trim();
     if (!/^-?[1-9]\d*$/.test(mid)) throw new Error('messageId 必须是消息 id（非零整数）');
     const message = await this.client.getMsg(mid);
-    this.#assertMessageBelongsTo(message, { kind, id, key, mid });
+    this.#assertMessageBelongsTo(message, { kind, id, key, mid, botId: await this.#botUserId() });
+    // 备注先校验再动账号：不能等 add_custom_face 已经执行完才发现备注非法。
+    const cleanRemark = sanitizeStickerText(remark, this.config.sticker.collect.maxRemarkChars);
+    if (cleanRemark && SENSITIVE_RE.test(cleanRemark)) throw new Error('备注不能包含本机路径或凭据');
     const url = this.#firstImageUrl(message?.message);
     if (!url) throw new Error('这条消息里没有可收藏的图片/表情');
     const { buffer } = await this.fetchBytes(url, 4 * 1024 * 1024, { timeoutMs: 12000 });
@@ -430,10 +488,7 @@ export class StickerService {
     const added = await this.client.addCustomFace('base64://' + buffer.toString('base64'));
     const emojiId = String(added?.emoji_id ?? '');
     if (!emojiId) throw new Error('add_custom_face 没有返回 emoji_id，收藏可能失败');
-    // 备注会进 QQ 账号、也会被注入提示词：单行化 + 截断 + 敏感串检查。
-    const cleanRemark = sanitizeStickerText(remark, this.config.sticker.collect.maxRemarkChars);
     if (cleanRemark) {
-      if (SENSITIVE_RE.test(cleanRemark)) throw new Error('备注不能包含本机路径或凭据');
       try {
         await this.client.modifyCustomFace(emojiId, cleanRemark);
       } catch (error) {
@@ -446,10 +501,20 @@ export class StickerService {
 
   // ── 修改收藏表情的官方备注（默认关闭） ──────────────────────────────────
 
-  async remark({ stickerId, remark } = {}) {
+  /**
+   * 修改收藏表情的官方备注（写操作，默认关闭）。
+   *
+   * 必须带 target 并通过白名单：这是**账号级**的写操作，不能因为「默认关闭」就省掉权限校验。
+   */
+  async remark({ target, stickerId, remark } = {}) {
     this.assertStickerEnabled();
     if (this.config.sticker.remark.enabled !== true) {
       throw new Error('修改收藏表情的官方备注是写操作，默认关闭；确认需要后把配置里的 sticker.remark.enabled 设为 true');
+    }
+    this.assertAllowed(target, '改备注');
+    // 只读模式（库损坏/宿主只读）下拒绝，而不是先改了 QQ 账号再报错说本地没保存。
+    if (!this.storeWritable) {
+      throw new Error('表情库处于只读模式，改备注会只改 QQ 账号、本地不同步，已拒绝执行');
     }
     const entry = await this.resolveFavorite(stickerId);
     const clean = sanitizeStickerText(remark, 50);
@@ -459,16 +524,18 @@ export class StickerService {
     if (idx >= 0) {
       this.entries[idx] = { ...this.entries[idx], desc: clean, updatedAt: new Date().toISOString() };
       if (!this.saveStore()) {
-        throw new Error('表情库处于只读模式（文件损坏或不可写），本次修改未保存；修复数据目录后重试');
+        // 账号已经改了：不要把「本地没同步」报成整体失败，否则调用方会重试改一遍账号。
+        this.log(`改备注成功但本地库未保存（${entry.id}）：只读模式或写盘失败`);
+        return { id: entry.id, desc: clean, localSaved: false };
       }
     }
-    return { id: entry.id, desc: clean };
+    return { id: entry.id, desc: clean, localSaved: true };
   }
 
   // ── 提示词 / 状态 ───────────────────────────────────────────────────────
 
   /** 拼一段可以塞进系统提示词的资料（可用表情 + 策略 + 节奏）。 */
-  async prompt({ key, max = 8 } = {}) {
+  async prompt({ key, max = 4 } = {}) {
     if (this.config.sticker.enabled === false) return '';
     if (this.entries.length === 0) await this.syncFavorites(false);
     return buildStickerPrompt({
@@ -476,6 +543,7 @@ export class StickerService {
       key,
       pace: this.pace,
       online: Boolean(this.webLibrary),
+      preview: this.config.sticker.preview?.enabled !== false,
       max
     });
   }

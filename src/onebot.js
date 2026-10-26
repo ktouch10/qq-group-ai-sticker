@@ -24,7 +24,8 @@ function normalizeReplyId(value) {
 
 function normalizeAtId(value) {
   const at = String(value ?? '').trim();
-  if (!/^\d+$/.test(at) || at === 'all' || at === '0') throw new Error('atUserId 必须是正整数 QQ 号，且不能为 all');
+  // 必须是规范的正整数：'00'、'007' 这类前导零会被 QQ 当成非法号码。
+  if (!/^[1-9]\d*$/.test(at)) throw new Error('atUserId 必须是正整数 QQ 号，且不能为 all 或带前导零');
   return at;
 }
 
@@ -54,7 +55,7 @@ export class OneBotClient {
         : '';
       throw new Error(`OneBot ${action} 请求失败：${error?.message ?? error}${hint}`);
     }
-    const body = await res.json().catch(() => ({}));
+    const body = (await res.json().catch(() => ({}))) ?? {};
     if (!res.ok || body.status !== 'ok' || body.retcode !== 0) {
       const hint = res.status === 426
         ? '（HTTP 426：onebot.httpUrl 可能指向了 WebSocket 端口，应为 OneBot HTTP API 地址）'
@@ -84,8 +85,16 @@ export class OneBotClient {
   }
 
   /** 取单条消息（用于收藏群友发来的图）。 */
-  getMsg(messageId) {
-    return this.call('get_msg', { message_id: Number(messageId) });
+  async getMsg(messageId) {
+    const id = Number(messageId);
+    // 超过 2^53 的消息 id 转 Number 会丢精度，进而可能读到别的消息。
+    if (!Number.isSafeInteger(id)) throw new Error('messageId 超出可安全表示的范围，拒绝按不精确的 id 读取消息');
+    return this.call('get_msg', { message_id: id });
+  }
+
+  /** 取登录账号信息（用于判断「是不是自己发的」）。 */
+  getLoginInfo() {
+    return this.call('get_login_info');
   }
 
   /**
@@ -100,6 +109,8 @@ export class OneBotClient {
       message.push({ type: 'reply', data: { id: normalizeReplyId(replyToMessageId) } });
     }
     if (atUserId !== undefined && atUserId !== null && String(atUserId).trim() !== '') {
+      // 私聊没有 @ 的概念：带上 at 段只会让网关报错或静默丢掉，直接拒绝更清楚。
+      if (kind === 'private') throw new Error('私聊不支持 atUserId（只有群聊可以 @）');
       message.push({ type: 'at', data: { qq: normalizeAtId(atUserId) } });
     }
     // 一条消息只能是一张表情：不混文字，避免真人群聊里出现「图+说明」的机器味。
