@@ -96,6 +96,8 @@ export function isPrivateIp(ip) {
     if (embedded) return isPrivateIp(embedded);
     if (h.startsWith('2001:db8')) return true;
     if (h.startsWith('2001:2:') || h.startsWith('2001:10:') || h.startsWith('2001:20:')) return true;
+    // Teredo 隧道（2001::/32，常见写法 2001:0:xxxx:...）：可以把流量绕到私网，按保留段一并拒绝。
+    if (h === '2001::' || h.startsWith('2001:0:') || h.startsWith('2001::')) return true;
     const sixth4 = h.match(/^2002:([0-9a-f]{1,4}):([0-9a-f]{1,4}):/i);
     if (sixth4) {
       const num = (parseInt(sixth4[1], 16) << 16) + parseInt(sixth4[2], 16);
@@ -323,12 +325,13 @@ function requestOnce(url, ip, limit, binary = false, options = {}) {
   });
 }
 
-export async function safeFetch(urlString, maxChars = 50000) {
+export async function safeFetch(urlString, maxChars = 50000, { timeoutMs } = {}) {
   validateLimit(maxChars, 'maxChars');
+  if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60000)) throw new Error('无效阅读时限');
   const MAX_REDIRECTS = 5;
   let { url, ip } = await validateFetchUrl(urlString);
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
-    const result = await requestOnce(url, ip, maxChars);
+    const result = await requestOnce(url, ip, maxChars, false, { timeoutMs });
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();

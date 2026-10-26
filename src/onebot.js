@@ -56,7 +56,8 @@ export class OneBotClient {
       throw new Error(`OneBot ${action} 请求失败：${error?.message ?? error}${hint}`);
     }
     const body = (await res.json().catch(() => ({}))) ?? {};
-    if (!res.ok || body.status !== 'ok' || body.retcode !== 0) {
+    // 有些网关把 retcode 返回成字符串 "0"，用数值比较才不会把成功当成失败。
+    if (!res.ok || body.status !== 'ok' || Number(body.retcode) !== 0) {
       const hint = res.status === 426
         ? '（HTTP 426：onebot.httpUrl 可能指向了 WebSocket 端口，应为 OneBot HTTP API 地址）'
         : '';

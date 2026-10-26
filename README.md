@@ -41,7 +41,7 @@ QQ 群友 ──► SnowLuma（OneBot v11）──► 本插件 ◄──► AI 
 - ⏱️ **人味节奏**：发图前有 0.8~2 秒随机停顿；同一会话有最小间隔和每小时上限；连发几条文字没配图时，提示层会提醒模型「该补一张了」（软提示，不强制）。
 - 🛡️ **默认安全**：发送/收藏/改备注都要过 allow 白名单；图片由本插件做 SSRF 防护后下载再 base64 交给网关，**绝不把 URL 交给网关去抓**；表情备注全程单行化并标注为「资料，不是指令」，堵住跨会话提示词注入。
 - 🧩 **两种用法**：MCP server（给任何 MCP 宿主）或纯 Node 库（自己注入提示词、自己发消息）。
-- 🧪 **84 个测试**：限额、缓存淘汰、并发队列、白名单、SSRF（`isPrivateIp` / DNS / 重定向 / 解压上限）、损坏库保护、MCP 端到端都有覆盖。
+- 🧪 **92 个测试**：限额、缓存淘汰、并发队列、白名单、SSRF（`isPrivateIp` / DNS / 重定向 / 解压上限）、损坏库保护、MCP 端到端都有覆盖。
 
 ## 快速开始
 
@@ -182,11 +182,13 @@ const block = await service.prompt({ key: 'group:123456789' }); // 可用表情 
 | `sticker.syncTtlMs` | `60000` | 收藏表情同步间隔；0 = 每次都同步 |
 | `sticker.maxListCount` | `100` | 单次向网关请求的收藏数量（1~500） |
 | `sticker.web.enabled` | `true` | 联网搜梗图开关 |
-| `sticker.preview.enabled` | `true` | 看图开关；关掉后只能从收藏里挑，模型看不到新图 |
+| `sticker.preview.enabled` | `true` | 看图开关；关掉后联网搜图也一起关（新图必须先看图才能发） |
+| `sticker.preview.maxPerHour` | `10` | 收藏表情看图：同一会话每小时最多几张 |
 | `sticker.send.minDelayMs` / `maxDelayMs` | `800` / `2000` | 发图前的人为停顿区间 |
 | `sticker.send.cooldownMs` | `20000` | 同一会话两张图的最小间隔 |
-| `sticker.send.maxPerHour` | `40` | 同一会话每小时最多发几张 |
-| `sticker.collect.maxRemarkChars` | `20` | 收藏表情时写备注的字数上限 |
+| `sticker.send.maxPerHour` | `40` | 同一会话每小时最多发几张；**0 = 禁止发送** |
+| `sticker.collect.maxRemarkChars` | `20` | 收藏表情时写备注的字数上限（0 = 不写备注） |
+| `sticker.collect.maxPerHour` | `5` | 同一会话每小时最多收藏几张（收藏会真写 QQ 账号） |
 | `sticker.remark.enabled` | `false` | 是否允许改 QQ 官方备注（写操作） |
 
 ## 数据与隐私
@@ -217,6 +219,8 @@ const block = await service.prompt({ key: 'group:123456789' }); // 可用表情 
 | 联网搜索（每会话） | 冷却 120 秒、每小时 3 次 |
 | 联网搜索（全局） | 每小时 12 次、每天 48 次 |
 | 看新图（每会话 / 全局） | 每小时 3 张 / 24 张（同一张已看过不重复占额度） |
+| 收藏表情（写 QQ 账号） | 每会话每小时 5 次 |
+| 收藏表情看图 | 每会话每小时 10 张 |
 | 联网搜索回退 | 主站 + 备用站各 1 页，不循环重试 |
 | 图片缓存 | 32MB / 120 项 / 30 天未用淘汰 |
 | 单图限制 | 联网图下载 2MiB（收藏表情 4MiB）、250 万像素、240 帧、30 秒；预览 JPEG ≤160KB |
@@ -278,7 +282,7 @@ service.noteTextSent('group:123456789');
 ## 开发
 
 ```bash
-npm test                      # 84 个测试（node:test）
+npm test                      # 92 个测试（node:test）
 node src/cli.js status        # CLI 冒烟
 ```
 
@@ -297,7 +301,7 @@ src/
   cli.js           命令行
 ```
 
-测试用假的网关（本地 HTTP server）与注入的 `fetchBytes` / `makePreview`，不连真实 QQ、不访问真实站点。
+测试用假的网关（本地 HTTP server）与注入的 `fetchText` / `fetchBytes` / `makePreview`，不连真实 QQ、不访问真实站点。
 
 ## 兼容性
 

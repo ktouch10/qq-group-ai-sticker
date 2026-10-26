@@ -37,13 +37,19 @@ test('环境变量优先于配置文件（token 不必写进文件）', () => {
   assert.equal(cfg.onebot.accessToken, 'env-token');
 });
 
-test('数值兜底：负间隔/超大上限被夹到合法区间', () => {
-  const cfg = normalizeConfig({ sticker: { maxListCount: 9999, send: { minDelayMs: -5, maxDelayMs: -1, maxPerHour: 0 }, collect: { maxRemarkChars: 0 } } }, { baseDir: '.', env: {} });
+test('数值兜底：负数回落默认；显式 0 保留（0 = 禁止/不写），不被默认值吞掉', () => {
+  const cfg = normalizeConfig({ sticker: { maxListCount: 9999, send: { minDelayMs: -5, maxDelayMs: -1, maxPerHour: 0 }, collect: { maxRemarkChars: 0, maxPerHour: 0 }, preview: { maxPerHour: 0 } } }, { baseDir: '.', env: {} });
   assert.equal(cfg.sticker.maxListCount, 500);
   assert.equal(cfg.sticker.send.minDelayMs, 0);
   assert.equal(cfg.sticker.send.maxDelayMs, 0);
-  assert.equal(cfg.sticker.send.maxPerHour, 40);
-  assert.equal(cfg.sticker.collect.maxRemarkChars, 20);
+  assert.equal(cfg.sticker.send.maxPerHour, 0, '0 表示禁止发送，不能被 || 改成 40');
+  assert.equal(cfg.sticker.collect.maxRemarkChars, 0, '0 表示不写备注');
+  assert.equal(cfg.sticker.collect.maxPerHour, 0);
+  assert.equal(cfg.sticker.preview.maxPerHour, 0);
+
+  const bad = normalizeConfig({ sticker: { send: { maxPerHour: -1 }, collect: { maxRemarkChars: -3 } } }, { baseDir: '.', env: {} });
+  assert.equal(bad.sticker.send.maxPerHour, 40, '非法负数回落默认');
+  assert.equal(bad.sticker.collect.maxRemarkChars, 20);
 });
 
 test('loadConfig：文件不存在时回落默认值；有 BOM 也能读', () => {

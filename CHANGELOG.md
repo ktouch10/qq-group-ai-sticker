@@ -2,6 +2,33 @@
 
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 0.1.3 — 2026-10-26
+
+第三轮评审后的硬化（无越权/数据丢失级别问题，主要是配额与边界）。
+
+### 修复
+
+- **每会话额度可被乱填 target 绕过**：`sticker_find` / `sticker_preview` / `sticker_note` 的 `target` 之前不做白名单校验，
+  模型填 `group:1…N` 就能拆着用每会话额度。现在给了 target 就必须过 `assertAllowed`。
+- **收藏与收藏表情看图没有配额**：`sticker_collect` 会真写 QQ 账号、收藏图看图会解码缩放，都能被循环调用。
+  新增 `sticker.collect.maxPerHour`（默认 5）与 `sticker.preview.maxPerHour`（默认 10）。
+- **`web-stickers.note` 的 note 回退**：只传 `usage` 时会被写成「含义」，现在明确要求 `note`。
+- **sharp 全局副作用**：`preview.js` 之前 import 时就改 `sharp.cache/concurrency`（进程全局），会拖慢宿主自己的图像任务；
+  已移除，改为靠「单张处理 + 像素/帧数上限」控制开销。
+- **`sanitizeStickerText`**：不再把 ZWJ 当零宽字符删掉（`👨‍👩‍👧` 不再被拆成三个人），并按码点截断，不切半个代理对。
+- **保存失败回滚**：`sticker_note` 落盘失败时回滚内存里的修改，不再出现「调用方收到失败、同进程 list() 却已看到」。
+  发送成功后使用统计落盘失败会打日志，不再静默丢失。
+- **配置里显式的 0 有语义了**：`sticker.send.maxPerHour: 0` = 禁止发送（之前被 `|| 40` 变成默认值 40）；
+  `sticker.collect.maxRemarkChars: 0` = 不写备注。
+- **联网搜索超时**：文本抓取支持 `timeoutMs`，搜图固定 10 秒/来源（之前默认 20 秒，两个来源最坏 40 秒）。
+- **Teredo 地址**（`2001::/32`）按保留段拒绝，与 SECURITY 的「保留段一律拒绝」一致。
+- **OneBot**：`retcode` 返回字符串 `"0"` 的网关不再被误判为失败；`package.json` exports 补 `./package.json`。
+
+### 测试
+
+92 个（+8）：target 白名单、收藏/看图配额、`maxPerHour=0` 语义、0 值配置、ZWJ/emoji 截断、web note 回退、
+Teredo、`retcode: "0"`、`safeFetch` 超时参数校验。
+
 ## 0.1.2 — 2026-10-26
 
 第二轮评审（含对 0.1.1 修复的复测）后的修补与补测。

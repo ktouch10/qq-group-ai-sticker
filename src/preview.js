@@ -4,9 +4,9 @@
 // 全程在进程内完成（sharp），不需要额外的 FFmpeg 可执行文件。
 import sharp from 'sharp';
 
-// 表情是高频小图：限制并发与缓存，避免和宿主的其他图像任务抢内存。
-sharp.cache({ memory: 16, files: 0, items: 20 });
-sharp.concurrency(1);
+// 注意：sharp 的 cache / concurrency 是**进程全局**设置。库不能在 import 时改它们，
+// 否则宿主自己的图像任务会被这个插件强制单线程。需要限制请在宿主侧显式调用 sharp.concurrency()。
+// 这一层只靠「一次只处理一张、限制输入像素/帧数/时长」来控制开销。
 
 const OPTIONS = { limitInputPixels: 16_000_000, failOn: 'warning' };
 const MAX_PIXELS = 2_500_000;

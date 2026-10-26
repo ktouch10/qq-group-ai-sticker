@@ -27,13 +27,15 @@
       "maxPerHour": 40
     },
     "collect": {
-      "maxRemarkChars": 20
+      "maxRemarkChars": 20,
+      "maxPerHour": 5
     },
     "remark": {
       "enabled": false
     },
     "preview": {
-      "enabled": true
+      "enabled": true,
+      "maxPerHour": 10
     }
   }
 }

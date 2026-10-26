@@ -36,7 +36,10 @@ export const DEFAULTS = Object.freeze({
       maxPerHour: 40
     },
     collect: {
-      maxRemarkChars: 20
+      // 收藏表情的备注长度上限（0 = 不写备注）
+      maxRemarkChars: 20,
+      // 同一个会话每小时最多收藏几张（收藏会真写 QQ 账号）
+      maxPerHour: 5
     },
     remark: {
       // 修改 QQ 账号里收藏表情的官方备注：写操作，默认关闭
@@ -44,7 +47,9 @@ export const DEFAULTS = Object.freeze({
     },
     preview: {
       // 看图（返回 JPEG 预览）默认开启；关掉后只能从收藏里挑，模型看不到新图
-      enabled: true
+      enabled: true,
+      // 收藏表情看图：按会话每小时的张数上限（联网看图另有自己的额度）
+      maxPerHour: 10
     }
   }
 });
@@ -90,8 +95,16 @@ export function normalizeConfig(raw = {}, { baseDir = process.cwd(), env = proce
   send.minDelayMs = Math.max(0, Number(send.minDelayMs) || 0);
   send.maxDelayMs = Math.max(send.minDelayMs, Number(send.maxDelayMs) || 0);
   send.cooldownMs = Math.max(0, Number(send.cooldownMs) || 0);
-  send.maxPerHour = Math.max(1, Number(send.maxPerHour) || 40);
-  cfg.sticker.collect.maxRemarkChars = Math.max(1, Number(cfg.sticker.collect.maxRemarkChars) || 20);
+  // 显式的 0 是「禁止发送」，不能被 `|| 40` 悄悄改成默认值。
+  const sendMax = Number(send.maxPerHour);
+  send.maxPerHour = Number.isFinite(sendMax) && sendMax >= 0 ? Math.floor(sendMax) : 40;
+  // 备注长度 0 = 不写备注（合法），同样不能用 `||` 吞掉。
+  const remarkChars = Number(cfg.sticker.collect.maxRemarkChars);
+  cfg.sticker.collect.maxRemarkChars = Number.isFinite(remarkChars) && remarkChars >= 0 ? Math.floor(remarkChars) : 20;
+  const collectMax = Number(cfg.sticker.collect.maxPerHour);
+  cfg.sticker.collect.maxPerHour = Number.isFinite(collectMax) && collectMax >= 0 ? Math.floor(collectMax) : 5;
+  const previewMax = Number(cfg.sticker.preview.maxPerHour);
+  cfg.sticker.preview.maxPerHour = Number.isFinite(previewMax) && previewMax >= 0 ? Math.floor(previewMax) : 10;
   return cfg;
 }
 

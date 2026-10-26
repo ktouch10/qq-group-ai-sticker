@@ -219,3 +219,11 @@ test('缓存文件是半截/0 字节时不算命中，会重新下载', () => fi
   await lib.preview(id, ctx);
   assert.ok(calls.filter((c) => c.kind === 'image').length > before, '半截缓存应被重新下载覆盖');
 }));
+
+test('库级 note 只传 usage 时不会把 usage 写成含义', () => fixture(async ({ lib }) => {
+  const id = (await lib.find('开心', ctx)).stickers[0].id;
+  await lib.preview(id, ctx);
+  assert.throws(() => lib.note(id, { usage: '赢下比赛时' }, ctx), /需要一句简短的表情含义/);
+  lib.note(id, { note: '猫猫得意', usage: '赢下比赛时' }, ctx);
+  assert.equal(lib.summary().reviewed, 1);
+}));

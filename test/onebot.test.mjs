@@ -141,3 +141,11 @@ test('get_login_info 用于识别本机 QQ 号', async () => {
     assert.equal((await client.getLoginInfo()).user_id, 123456);
   } finally { server.close(); }
 });
+
+test('网关把 retcode 返回成字符串 "0" 时仍按成功处理', async () => {
+  const server = await startServer((req, res) => res.end(JSON.stringify({ status: 'ok', retcode: '0', data: { user_id: 1 } })));
+  try {
+    const client = new OneBotClient({ httpUrl: urlOf(server) });
+    assert.equal((await client.getLoginInfo()).user_id, 1);
+  } finally { server.close(); }
+});

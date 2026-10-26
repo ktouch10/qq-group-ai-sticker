@@ -34,13 +34,15 @@ export function nowIso() {
  */
 export function sanitizeStickerText(value, max = 200) {
   const limit = Math.max(1, Number(max) || 200);
-  return String(value ?? '')
+  const clean = String(value ?? '')
     // 换行 / 制表 / 全角空格等一切空白压成单个半角空格
     .replace(/[\s\u00a0\u3000]+/g, ' ')
-    // 去掉其余控制字符与零宽字符（可能被用来伪装成不可见的分段符）
-    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\ufeff]/g, '')
-    .trim()
-    .slice(0, limit);
+    // 去掉控制字符与零宽字符（可能被用来伪装成不可见的分段符）。
+    // 注意保留 ZWJ(\u200d)：emoji 组合序列（👨‍👩‍👧）靠它才是一个字符，删掉会拆成三个人。
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200c\u200e-\u200f\u2028\u2029\ufeff]/g, '')
+    .trim();
+  // 按码点截断，避免把 emoji 的代理对切成半个字符。
+  return Array.from(clean).slice(0, limit).join('');
 }
 
 export function normalizeStickerEntry(raw) {

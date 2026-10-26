@@ -58,3 +58,14 @@ test('looksLikeImageBuffer 只认四种图片魔数', () => {
   assert.equal(looksLikeImageBuffer(Buffer.alloc(4)), false);
   assert.equal(looksLikeImageBuffer(null), false);
 });
+
+test('Teredo 隧道地址（2001::/32）按保留段拒绝', async () => {
+  for (const ip of ['2001:0:4136:e378:8000:63bf:3fff:fdd2', '2001::1', '2001:0:0:0:0:0:0:1']) {
+    assert.equal(isPrivateIp(ip), true, `${ip} 应判为不安全`);
+  }
+});
+
+test('safeFetch 拒绝非法的自定义超时', async () => {
+  const { safeFetch } = await import('../src/safe-fetch.js');
+  await assert.rejects(safeFetch('https://example.com/', 1000, { timeoutMs: 10 }), /无效阅读时限/);
+});

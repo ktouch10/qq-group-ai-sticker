@@ -140,7 +140,7 @@ export function createWebStickerLibrary({ root, fetchBytes = safeFetchBytes, fet
       const sources=[['dogetu','https://www.dogetu.com/search?keyword='+encodeURIComponent(q)],['fabiaoqing','https://fabiaoqing.com/search/bqb/keyword/'+encodeURIComponent(q)]];
       for(const [source,url] of sources){
         guard();
-        try{const r=await fetchText(url,LIMIT.html);guard();success=true;results=parseExpressionResults(String(r?.body ?? ''),source,q);if(results.length)break;}
+        try{const r=await fetchText(url,LIMIT.html,{timeoutMs:10000});guard();success=true;results=parseExpressionResults(String(r?.body ?? ''),source,q);if(results.length)break;}
         catch(e){guard();}
       }
       guard();
@@ -197,11 +197,12 @@ export function createWebStickerLibrary({ root, fetchBytes = safeFetchBytes, fet
   function note(id,patch,{owner,token,guard=()=>{}}={}) {
     guard();const e=entry(id);
     if(!viewed.has(ticket(owner,token,id)))throw new Error('先看过这张图的缩略图，再记录含义；不能把网页标题当成已经看懂');
-    const text=sanitizeStickerText(patch.note||patch.usage,60);
-    if(!text||SENSITIVE_RE.test(text))throw new Error('请记一句简短的表情含义，不含路径或凭据');
+    // note 与 usage 不能互相顶替：只传 usage 时不能把 usage 写成「含义」。
+    const text=sanitizeStickerText(patch.note,60);
+    if(!text)throw new Error('需要一句简短的表情含义（note），不能只传 usage');
     const usage=sanitizeStickerText(patch.usage,60);
+    if(SENSITIVE_RE.test(text)||SENSITIVE_RE.test(usage))throw new Error('表情备注不能包含本机路径或凭据');
     const tags=Array.isArray(patch.tags)?patch.tags.map(t=>sanitizeStickerText(t,12)).filter(t=>t&&!SENSITIVE_RE.test(t)).slice(0,6):[];
-    if(SENSITIVE_RE.test(usage))throw new Error('表情用途不能包含路径或凭据');
     e.note=text;e.usage=usage;e.tags=tags;e.reviewed=true;e.lastUsedAt=now();save();return concise(e);
   }
   async function image(id,{owner,token,guard=()=>{}}={}) {

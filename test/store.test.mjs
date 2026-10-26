@@ -147,3 +147,13 @@ test('buildStickerContext 最多展示 4 条，且不会超过库里实际条数
   const few = [normalizeStickerEntry({ id: 'x', resId: 'x', localNote: '只有一个' })];
   assert.equal(buildStickerContext(few, 99).split('\n').filter((l) => l.startsWith('- ')).length, 1);
 });
+
+test('sanitizeStickerText 保留 ZWJ 组合 emoji，并按码点截断', () => {
+  const family = '👨‍👩‍👧';
+  assert.equal(sanitizeStickerText(family), family, 'ZWJ 不能被当零宽字符删掉');
+  // 截断不能留下半个代理对
+  const truncated = sanitizeStickerText('😀😀😀', 2);
+  assert.equal(truncated, '😀😀');
+  assert.equal([...truncated].length, 2);
+  assert.doesNotMatch(truncated, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+});

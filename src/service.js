@@ -96,6 +96,8 @@ export class StickerService {
 
     this.pace = deps.pace ?? new StickerPace(deps.paceOptions);
     this.sendTimes = new Map(); // key -> number[]
+    this.collectTimes = new Map(); // key -> number[]（收藏会真写 QQ 账号，按小时限次）
+    this.previewTimes = new Map(); // key -> number[]（收藏表情看图会解码，按小时限次）
     this.byteCache = new Map(); // stickerId -> { buffer, at }
     this.byteCacheBytes = 0;
   }
@@ -151,6 +153,7 @@ export class StickerService {
       const wait = Math.ceil((cooldownMs - (now - last)) / 1000);
       throw new Error(`发送太频繁：${key} 距上一条表情不到 ${Math.round(cooldownMs / 1000)} 秒，请 ${wait} 秒后再发`);
     }
+    if (maxPerHour === 0) throw new Error(`${key} 已禁止发送表情（配置里 sticker.send.maxPerHour=0）`);
     if (times.length >= maxPerHour) {
       throw new Error(`${key} 这一小时已经发过 ${times.length} 张表情，达到上限；先用文字聊天`);
     }
@@ -262,6 +265,28 @@ export class StickerService {
   // ── 搜索 / 看图 / 记录含义 ──────────────────────────────────────────────
 
   /**
+   * 解析「这次操作用哪个会话记账」。
+   * 给了 target 就必须过白名单：否则模型可以随便填 group:1、group:2… 把每会话额度拆着用。
+   */
+  #scope(target, owner) {
+    if (target) {
+      this.assertAllowed(target, '操作');
+      return parseTarget(target).key;
+    }
+    return owner || 'local';
+  }
+
+  /** 简单的小时配额（收藏、收藏图看图这类会写账号/吃 CPU 的操作）。 */
+  #assertQuota(map, key, max, label) {
+    const now = this.now();
+    const rows = (map.get(key) ?? []).filter((t) => t > now - 60 * 60 * 1000);
+    if (max === 0) throw new Error(`${label}已被配置关闭（每小时上限为 0）`);
+    if (rows.length >= max) throw new Error(`${label}太频繁：${key} 这一小时已达 ${max} 次上限，稍后再试`);
+    rows.push(now);
+    map.set(key, rows);
+  }
+
+  /**
    * 找表情：先看 QQ 收藏，再看联网梗图库。
    * 返回值只含短文字候选（不含 URL），由模型决定用哪一张。
    */
@@ -269,7 +294,7 @@ export class StickerService {
     this.assertStickerEnabled();
     const q = String(query ?? '').trim();
     if (!q) throw new Error('需要一个 1~16 字的情绪/动作词，例如“开心”“猫猫无语”');
-    const scope = target ? parseTarget(target).key : (owner || 'local');
+    const scope = this.#scope(target, owner);
     // 收藏表情优先：命中就不用联网，也更快。
     await this.syncFavorites(false);
     const local = formatStickerList(this.entries, q, 3);
@@ -296,11 +321,13 @@ export class StickerService {
     if (this.config.sticker.preview.enabled === false) throw new Error('看图功能已在配置里关闭（sticker.preview.enabled=false）');
     const id = String(stickerId ?? '').trim();
     if (!id) throw new Error('缺少 stickerId');
-    const scope = target ? parseTarget(target).key : (owner || 'local');
+    const scope = this.#scope(target, owner);
     if (isWebStickerId(id)) {
       if (!this.webLibrary) throw new Error('联网搜图已关闭，这张图不可用');
       return this.webLibrary.preview(id, { owner: scope, token: this.sessionToken });
     }
+    // 收藏表情看图会解码 + 缩放，属于吃 CPU 的路径：按会话限次数，防被模型循环调用。
+    this.#assertQuota(this.previewTimes, scope, this.config.sticker.preview.maxPerHour, '收藏表情看图');
     const entry = await this.resolveFavorite(id);
     const buffer = await this.bytesOf(entry);
     const jpeg = await this.makePreview(buffer, {});
@@ -321,7 +348,7 @@ export class StickerService {
     this.assertStickerEnabled();
     const id = String(stickerId ?? '').trim();
     if (!id) throw new Error('缺少 stickerId');
-    const scope = target ? parseTarget(target).key : (owner || 'local');
+    const scope = this.#scope(target, owner);
     if (isWebStickerId(id)) {
       if (!this.webLibrary) throw new Error('联网搜图已关闭，这张图不可用');
       return this.webLibrary.note(id, { note, tags, usage }, { owner: scope, token: this.sessionToken });
@@ -339,8 +366,11 @@ export class StickerService {
       updated = applyStickerNote(this.entries, id, patch);
     }
     if (!updated.entry) throw new Error(`找不到表情 ${id}，请先用 sticker_list 获取有效 id`);
+    // 先落盘成功再更新内存：否则调用方收到失败，但同进程的 list() 已经能看到这条没保存的 note。
+    const previous = this.entries;
     this.entries = updated.entries;
     if (!this.saveStore()) {
+      this.entries = previous;
       throw new Error('表情库处于只读模式（文件损坏或不可写），本次修改未保存；修复数据目录后重试');
     }
     return { id: updated.entry.id, label: updated.entry.localNote || updated.entry.desc, tags: updated.entry.tags, usage: updated.entry.usage };
@@ -404,7 +434,7 @@ export class StickerService {
         else {
           const updated = markStickerUsed(this.entries, entry.id, 'sticker');
           this.entries = updated.entries;
-          this.saveStore();
+          if (!this.saveStore()) this.log(`发送成功但使用统计未保存（${entry.id}）：只读模式或写盘失败`);
         }
       } catch (error) {
         this.log(`发送成功但使用统计未保存：${error?.message ?? error}`);
@@ -473,6 +503,7 @@ export class StickerService {
   async collect({ target, messageId, remark } = {}) {
     this.assertStickerEnabled();
     const { kind, id, key } = this.assertAllowed(target, '收藏表情');
+    this.#assertQuota(this.collectTimes, key, this.config.sticker.collect.maxPerHour, '收藏表情');
     const mid = String(messageId ?? '').trim();
     if (!/^-?[1-9]\d*$/.test(mid)) throw new Error('messageId 必须是消息 id（非零整数）');
     const message = await this.client.getMsg(mid);

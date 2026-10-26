@@ -364,3 +364,31 @@ test('writeStore=false 时只读运行，不回写 stickers.json（供宿主拼�
     assert.equal(svc.status().storeWritable, false);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test('find/preview 带未授权的 target 会被拒绝（不能靠乱填 target 拆额度）', async () => {
+  const { service, cleanup } = setup();
+  try {
+    await assert.rejects(service.find({ query: '开心', target: 'group:999' }), /白名单/);
+    await assert.rejects(service.preview({ stickerId: 'a', target: 'group:999' }), /白名单/);
+    await assert.rejects(service.note({ stickerId: 'a', note: 'x', target: 'group:999' }), /白名单/);
+  } finally { cleanup(); }
+});
+
+test('收藏与收藏表情看图有每小时配额', async () => {
+  const { service, client, cleanup } = setup({ sticker: { collect: { maxRemarkChars: 20, maxPerHour: 1 }, preview: { enabled: true, maxPerHour: 1 } } });
+  try {
+    await service.syncFavorites(true);
+    await service.preview({ stickerId: 'a', target: 'group:123' });
+    await assert.rejects(service.preview({ stickerId: 'a', target: 'group:123' }), /太频繁|上限/);
+    client.msg = { self_id: 1, message_type: 'group', group_id: 123, sender: { user_id: 2 }, message: [{ type: 'image', data: { url: 'https://cdn.example.com/x.png' } }] };
+    assert.ok((await service.collect({ target: 'group:123', messageId: 71 })).emojiId);
+    await assert.rejects(service.collect({ target: 'group:123', messageId: 72 }), /太频繁|上限/);
+  } finally { cleanup(); }
+});
+
+test('maxPerHour=0 表示禁止发送，而不是回落到默认值', async () => {
+  const { service, cleanup } = setup({ sticker: { send: { minDelayMs: 0, maxDelayMs: 0, cooldownMs: 0, maxPerHour: 0 } } });
+  try {
+    await assert.rejects(service.send({ target: 'group:123', stickerId: 'a' }), /禁止发送/);
+  } finally { cleanup(); }
+});
